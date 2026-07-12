@@ -1,0 +1,37 @@
+# Code-only backup policy
+*
+!*/
+!.gitignore
+!LICENSE
+!*.m
+!*.py
+!*.js
+!*.html
+!*.css
+!*.md
+!*.bat
+!*.ps1
+!*.json
+!*.yaml
+!*.yml
+!*.feature
+
+# Local tools, generated runs, caches, and binary models
+.tools/
+.playwright-cli/
+agentic_toolkits/
+pid_tuning_runs/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.log
+**/run_job_*.m
+**/inspect_*.json
+**/inspect_*_result.json
+*.slx
+*.mdl
+!pid_ai_second_order_demo.slx
+!pid_ai_cascade_two_pid_demo.slx
+slprj/
+*.slxc
+*.asv

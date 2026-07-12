@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["pids"],
+        "additionalProperties": false,
+        "properties": {
+          "pids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "Kp", "Ki", "Kd", "N"],
+              "additionalProperties": false,
+              "properties": {
+                "name": {"type": "string"},
+                "Kp": {"type": "number"},
+                "Ki": {"type": "number"},
+                "Kd": {"type": "number"},
+                "N": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

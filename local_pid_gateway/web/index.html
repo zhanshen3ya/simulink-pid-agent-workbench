@@ -1,0 +1,150 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PID 调参控制台</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">PID</div>
+        <div>
+          <h1>调参控制台</h1>
+          <p id="connectionState">未连接</p>
+        </div>
+      </div>
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="run">运行监控</button>
+        <button class="nav-item" data-view="history">历史记录</button>
+        <button class="nav-item" data-view="result">最终结果</button>
+      </nav>
+      <div class="sidebar-actions">
+        <button id="refreshButton" class="secondary-button">刷新</button>
+        <button id="startDemoButton" class="primary-button">启动双 PID Demo</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="jobTitle">等待任务</h2>
+          <p id="jobSubtitle">本地 MATLAB / Simulink</p>
+        </div>
+        <div class="status-pill" id="statusPill">idle</div>
+      </header>
+
+      <section class="view active" id="view-run">
+        <div class="metric-grid">
+          <section class="metric-tile">
+            <span>已运行时间</span>
+            <strong id="elapsedTime">00:00:00</strong>
+          </section>
+          <section class="metric-tile">
+            <span>当前轮次</span>
+            <strong id="iterationText">0 / 0</strong>
+          </section>
+          <section class="metric-tile">
+            <span>已测试次数</span>
+            <strong id="testedText">0</strong>
+          </section>
+          <section class="metric-tile">
+            <span>通过次数</span>
+            <strong id="passedText">0</strong>
+          </section>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-title">
+              <h3>当前参数</h3>
+              <span id="currentSummary">暂无</span>
+            </div>
+            <div class="pid-table-wrap">
+              <table class="pid-table">
+                <thead>
+                  <tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr>
+                </thead>
+                <tbody id="currentPidRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <h3>当前效果</h3>
+              <span id="currentPass">暂无</span>
+            </div>
+            <div class="metrics-list" id="currentMetrics"></div>
+          </section>
+        </div>
+
+        <section class="panel full-width">
+          <div class="panel-title">
+            <h3>最近候选</h3>
+            <span>自动保留最近 10 条</span>
+          </div>
+          <div class="table-scroll">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>轮次</th><th>候选</th><th>通过</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>分数</th>
+                </tr>
+              </thead>
+              <tbody id="recentRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-history">
+        <section class="panel full-width stretch">
+          <div class="panel-title">
+            <h3>全部历史记录</h3>
+            <span id="historyCount">0 条</span>
+          </div>
+          <div class="table-scroll large">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>时间</th><th>轮次</th><th>候选</th><th>PID 参数</th><th>通过</th><th>失败原因</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>IAE</th><th>分数</th>
+                </tr>
+              </thead>
+              <tbody id="historyRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-result">
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-title">
+              <h3>当前最优</h3>
+              <span id="bestKind">暂无</span>
+            </div>
+            <div class="pid-table-wrap">
+              <table class="pid-table">
+                <thead>
+                  <tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr>
+                </thead>
+                <tbody id="bestPidRows"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-title">
+              <h3>最优效果</h3>
+              <span id="bestScore">暂无</span>
+            </div>
+            <div class="metrics-list" id="bestMetrics"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
