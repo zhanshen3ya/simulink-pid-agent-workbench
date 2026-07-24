@@ -240,6 +240,8 @@ def launch_job(job_id, script):
                 "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
             write_status(job_id, current)
+        else:
+            trigger_code_backup(job_id)
 
     threading.Thread(target=pump, daemon=True).start()
 
