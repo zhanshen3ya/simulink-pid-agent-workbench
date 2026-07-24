@@ -9,7 +9,8 @@ metrics.isFinite = false;
 metrics.isStable = false;
 
 metricNames = ["overshootPct", "settlingTime", "steadyStateError", ...
-    "iae", "ise", "itae", "controlEnergy", "maxAbsControl"];
+    "iae", "ise", "itae", "controlEnergy", "maxAbsControl", ...
+    "maxAbsCurrent", "outputRipple", "controlSaturationFraction"];
 for name = metricNames
     metrics.(name) = inf;
 end
@@ -97,8 +98,33 @@ end
 
 metrics.maxAbsOutput = max(abs(y));
 metrics.maxAbsError = max(abs(e));
+metrics.outputRipple = max(y(tailIdx)) - min(y(tailIdx));
+
+metrics.maxAbsCurrent = 0;
+if isfield(cfg, "currentSignalName") && strlength(string(cfg.currentSignalName)) > 0
+    try
+        [ti, current] = pid_tuning_core.extractSignalVector( ...
+            simResult.output, cfg.currentSignalName);
+        if numel(ti) ~= numel(t) || any(abs(ti(:) - t(:)) > 1e-9)
+            current = interp1(ti(:), current(:), t(:), "linear", "extrap");
+        end
+        metrics.maxAbsCurrent = max(abs(current));
+    catch err
+        metrics.error = "Current signal extraction failed: " + string(err.message);
+        metrics.maxAbsCurrent = inf;
+    end
+end
+
+metrics.controlSaturationFraction = 0;
+if ~isempty(u) && isfield(cfg.metrics, "controlUpperLimit") && ...
+        isfinite(cfg.metrics.controlUpperLimit)
+    tolerance = cfg.metrics.controlSaturationTolerance;
+    saturatedThreshold = cfg.metrics.controlUpperLimit * (1 - tolerance);
+    metrics.controlSaturationFraction = mean(u >= saturatedThreshold);
+end
+
 metrics.isStable = metrics.maxAbsOutput <= cfg.metrics.maxAbsOutput && ...
     metrics.maxAbsError <= cfg.metrics.maxAbsErrorForStable && ...
-    isfinite(metrics.settlingTime);
+    isfinite(metrics.settlingTime) && isfinite(metrics.maxAbsCurrent);
 end
 

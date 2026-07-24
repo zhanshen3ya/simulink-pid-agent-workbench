@@ -13,6 +13,7 @@ cfg.stopTime = "10";
 cfg.referenceSignalName = "r";
 cfg.outputSignalName = "y";
 cfg.controlSignalName = "u";
+cfg.currentSignalName = "";
 
 cfg.randomSeed = 1;
 cfg.maxIterations = 20;
@@ -64,6 +65,8 @@ cfg.metrics.settlingBand = 0.02;
 cfg.metrics.tailFraction = 0.1;
 cfg.metrics.maxAbsOutput = 1e6;
 cfg.metrics.maxAbsErrorForStable = 1e6;
+cfg.metrics.controlUpperLimit = inf;
+cfg.metrics.controlSaturationTolerance = 1e-3;
 
 cfg.targets = struct();
 cfg.targets.overshootPctMax = 10;
@@ -74,6 +77,9 @@ cfg.targets.iseMax = inf;
 cfg.targets.itaeMax = inf;
 cfg.targets.maxAbsControlMax = inf;
 cfg.targets.controlEnergyMax = inf;
+cfg.targets.maxAbsCurrentMax = inf;
+cfg.targets.outputRippleMax = inf;
+cfg.targets.controlSaturationFractionMax = inf;
 
 cfg.weights = struct();
 cfg.weights.iae = 1.0;
@@ -84,6 +90,9 @@ cfg.weights.settlingTime = 0.5;
 cfg.weights.steadyStateError = 10.0;
 cfg.weights.controlEnergy = 0.001;
 cfg.weights.maxAbsControl = 0.01;
+cfg.weights.maxAbsCurrent = 0.01;
+cfg.weights.outputRipple = 1.0;
+cfg.weights.controlSaturationFraction = 1.0;
 cfg.weights.failurePenalty = 1e6;
 
 cfg.logging = struct();

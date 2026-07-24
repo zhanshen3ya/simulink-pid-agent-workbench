@@ -25,14 +25,14 @@ AI 接入是可选项：
 
 ## 隐私与仓库边界
 
-仓库只发布源代码、文档、测试和两个公开 Demo 模型。以下内容不会上传：
+仓库只发布源代码、文档、测试和三个公开 Demo 模型。以下内容不会上传：
 
 - pid_tuning_runs/ 中每次调参的参数、指标、历史和日志。
 - 用户导入的任意 .slx / .mdl 模型。
 - .tools/ 中的本地 CLI、SSH 密钥和依赖。
 - API Key、浏览器本地配置、MATLAB 缓存和 Python 缓存。
 
-仅 pid_ai_second_order_demo.slx 和 pid_ai_cascade_two_pid_demo.slx 作为公开示例纳入发行包。
+仅 pid_ai_second_order_demo.slx、pid_ai_cascade_two_pid_demo.slx 和 pid_ai_buck_dual_loop_demo.slx 作为公开示例纳入发行包。
 
 这个工作区已经搭好一个 MATLAB/Simulink 闭环 PID 调参骨架。核心原则：
 
@@ -238,3 +238,21 @@ Code Agent 模式支持：
 
 - pid_ai_second_order_demo.slx：单 PID。
 - pid_ai_cascade_two_pid_demo.slx：内外环两个 PID 联合调参。
+## Buck 双闭环电路 Demo
+
+新增 `pid_ai_buck_dual_loop_demo.slx`，用于比二阶传递函数更接近电力电子控制的联合调参：
+
+- 24 V 输入、12 V 输出的 Buck 平均电路，包含 470 uH 电感、470 uF 电容和 0.08 ohm 线圈电阻。
+- 外环电压 PI 生成电流给定，内环电流 PI 生成占空比，两组参数在同一个候选中联合调整。
+- 0.08 s 时输入从 24 V 跌落到 20 V，0.12 s 时负载从 6 ohm 跳变为 3 ohm。
+- 每个候选固定检查超调、调节时间、稳态误差、IAE、占空比、电感电流峰值、输出纹波和占空比饱和比例。
+
+MATLAB 直接运行：
+
+```matlab
+addpath(genpath(pwd))
+report = examples.validate_buck_dual_loop_demo
+result = examples.demo_buck_dual_loop_tuning
+```
+
+也可以启动本地控制台后点击“Buck 双环电路 Demo”。该模型用于快速批量搜索；面向真实硬件部署时，仍需将候选参数放入开关级 Simscape Electrical 模型并进行采样、PWM、器件损耗和保护逻辑验证。

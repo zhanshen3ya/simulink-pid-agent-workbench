@@ -32,6 +32,7 @@ pid_tuning_runs/
 *.mdl
 !pid_ai_second_order_demo.slx
 !pid_ai_cascade_two_pid_demo.slx
+!pid_ai_buck_dual_loop_demo.slx
 slprj/
 *.slxc
 *.asv

@@ -36,6 +36,15 @@ end
 if metrics.controlEnergy > cfg.targets.controlEnergyMax
     failures(end + 1) = "control_energy";
 end
+if metrics.maxAbsCurrent > cfg.targets.maxAbsCurrentMax
+    failures(end + 1) = "max_abs_current";
+end
+if metrics.outputRipple > cfg.targets.outputRippleMax
+    failures(end + 1) = "output_ripple";
+end
+if metrics.controlSaturationFraction > cfg.targets.controlSaturationFractionMax
+    failures(end + 1) = "control_saturation";
+end
 
 score = 0;
 score = score + cfg.weights.iae * localFinite(metrics.iae);
@@ -46,6 +55,10 @@ score = score + cfg.weights.settlingTime * localFinite(metrics.settlingTime);
 score = score + cfg.weights.steadyStateError * abs(localFinite(metrics.steadyStateError));
 score = score + cfg.weights.controlEnergy * localFinite(metrics.controlEnergy);
 score = score + cfg.weights.maxAbsControl * localFinite(metrics.maxAbsControl);
+score = score + cfg.weights.maxAbsCurrent * localFinite(metrics.maxAbsCurrent);
+score = score + cfg.weights.outputRipple * localFinite(metrics.outputRipple);
+score = score + cfg.weights.controlSaturationFraction * ...
+    localFinite(metrics.controlSaturationFraction);
 
 if ~isempty(failures)
     score = score + cfg.weights.failurePenalty * numel(failures);

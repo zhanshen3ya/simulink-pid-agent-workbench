@@ -203,6 +203,47 @@ def start_single_pid_demo():
     })
 
 
+def start_buck_dual_loop_demo():
+    model_path = base.ROOT / "pid_ai_buck_dual_loop_demo.slx"
+    if not model_path.is_file():
+        raise RuntimeError(f"Buck dual-loop Demo model not found: {model_path}")
+    return start_custom_job({
+        "modelPath": str(model_path),
+        "pidBlocks": [
+            {
+                "name": "voltage",
+                "path": "pid_ai_buck_dual_loop_demo/Outer_Voltage_PI",
+                "bounds": {"Kp": [0.01, 0.15], "Ki": [4, 24], "Kd": [0, 0], "N": [100, 100]},
+            },
+            {
+                "name": "current",
+                "path": "pid_ai_buck_dual_loop_demo/Inner_Current_PI",
+                "bounds": {"Kp": [0.015, 0.08], "Ki": [2, 20], "Kd": [0, 0], "N": [100, 100]},
+            },
+        ],
+        "referenceSignalName": "r",
+        "outputSignalName": "y",
+        "controlSignalName": "u",
+        "currentSignalName": "iL",
+        "controlUpperLimit": 0.95,
+        "stopTime": "0.3",
+        "maxIterations": 6,
+        "numCandidates": 10,
+        "stopOnFirstPass": False,
+        "targets": {
+            "overshootPctMax": 12,
+            "settlingTimeMax": 0.27,
+            "steadyStateErrorAbsMax": 0.1,
+            "iaeMax": 0.65,
+            "maxAbsControlMax": 0.95,
+            "maxAbsCurrentMax": 6,
+            "outputRippleMax": 0.2,
+            "controlSaturationFractionMax": 0.02,
+        },
+        "ai": {"mode": "none"},
+    })
+
+
 class Handler(base.Handler):
     def do_POST(self):
         path = urlparse(self.path).path
@@ -213,6 +254,10 @@ class Handler(base.Handler):
                 return
             if path == "/api/pid/jobs/custom":
                 job_id = start_custom_job(self.read_json_body())
+                self.send_json({"jobId": job_id, "status": "started"})
+                return
+            if path == "/api/pid/jobs/demo/buck":
+                job_id = start_buck_dual_loop_demo()
                 self.send_json({"jobId": job_id, "status": "started"})
                 return
             if path == "/api/pid/jobs/demo/single":
@@ -242,6 +287,7 @@ class Handler(base.Handler):
                 "aiModes": ["none", "api", "agent"],
                 "aiPresets": True,
                 "singlePidDemo": str(base.ROOT / "pid_ai_second_order_demo.slx"),
+                "buckDualLoopDemo": str(base.ROOT / "pid_ai_buck_dual_loop_demo.slx"),
             })
             return
         if urlparse(self.path).path == "/api/ai/agents":

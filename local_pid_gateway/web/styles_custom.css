@@ -267,3 +267,23 @@ select {
   .agent-test-row { grid-template-columns: 1fr 1fr; }
   .agent-status { grid-column: 1 / -1; }
 }
+/* Mobile task header containment */
+.topbar > div:first-child {
+  min-width: 0;
+}
+.topbar p {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 620px) {
+  .topbar {
+    align-items: flex-start;
+  }
+  .topbar h2 {
+    font-size: 20px;
+    overflow-wrap: anywhere;
+  }
+  .status-pill {
+    min-width: 80px;
+    flex: 0 0 auto;
+  }
+}

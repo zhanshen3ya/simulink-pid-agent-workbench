@@ -167,6 +167,7 @@ def normalize_custom_payload(payload):
     for field in (
         "overshootPctMax", "settlingTimeMax", "steadyStateErrorAbsMax",
         "iaeMax", "iseMax", "itaeMax", "maxAbsControlMax", "controlEnergyMax",
+        "maxAbsCurrentMax", "outputRippleMax", "controlSaturationFractionMax",
     ):
         if field in (payload.get("targets") or {}):
             try:
@@ -181,6 +182,8 @@ def normalize_custom_payload(payload):
         "referenceSignalName": str(payload.get("referenceSignalName") or "r"),
         "outputSignalName": str(payload.get("outputSignalName") or "y"),
         "controlSignalName": str(payload.get("controlSignalName") or "u"),
+        "currentSignalName": str(payload.get("currentSignalName") or ""),
+        "controlUpperLimit": float(payload.get("controlUpperLimit") or 1e12),
         "maxIterations": max_iterations,
         "numCandidates": num_candidates,
         "randomSeed": random_seed,

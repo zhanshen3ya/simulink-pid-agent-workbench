@@ -32,6 +32,7 @@ cfg = localAssignString(cfg, raw, "stopTime");
 cfg = localAssignString(cfg, raw, "referenceSignalName");
 cfg = localAssignString(cfg, raw, "outputSignalName");
 cfg = localAssignString(cfg, raw, "controlSignalName");
+cfg = localAssignString(cfg, raw, "currentSignalName");
 cfg = localAssignNumber(cfg, raw, "randomSeed");
 cfg = localAssignNumber(cfg, raw, "maxIterations");
 cfg = localAssignNumber(cfg, raw, "numCandidates");
@@ -42,12 +43,21 @@ cfg = localAssignAi(cfg, raw);
 if isfield(raw, "targets") && isstruct(raw.targets)
     targetFields = ["overshootPctMax", "settlingTimeMax", ...
         "steadyStateErrorAbsMax", "iaeMax", "iseMax", "itaeMax", ...
-        "maxAbsControlMax", "controlEnergyMax"];
+        "maxAbsControlMax", "controlEnergyMax", "maxAbsCurrentMax", ...
+        "outputRippleMax", "controlSaturationFractionMax"];
     for field = targetFields
         if isfield(raw.targets, field)
             cfg.targets.(field) = double(raw.targets.(field));
         end
     end
+end
+
+if isfield(raw, "controlUpperLimit")
+    value = double(raw.controlUpperLimit);
+    if ~isscalar(value) || ~isfinite(value) || value <= 0
+        error("controlUpperLimit must be a positive finite scalar.");
+    end
+    cfg.metrics.controlUpperLimit = value;
 end
 
 result = main_pid_search(cfg);

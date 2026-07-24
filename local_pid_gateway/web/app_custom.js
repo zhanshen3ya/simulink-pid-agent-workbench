@@ -64,6 +64,8 @@ function metricRows(metrics) {
     ['超调 (%)', 'overshootPct'], ['调节时间 (s)', 'settlingTime'],
     ['稳态误差', 'steadyStateError'], ['IAE', 'iae'], ['ISE', 'ise'],
     ['ITAE', 'itae'], ['控制能量', 'controlEnergy'], ['最大控制量', 'maxAbsControl'],
+    ['电感电流峰值 (A)', 'maxAbsCurrent'], ['输出纹波 (V)', 'outputRipple'],
+    ['占空比饱和比例', 'controlSaturationFraction'],
   ].map(([label, key]) => `<div class="metric-row"><span>${label}</span><strong>${metricValue(metrics, key)}</strong></div>`).join('');
 }
 
@@ -600,6 +602,22 @@ async function startSingleDemo() {
     button.textContent = '运行单 PID Demo';
   }
 }
+async function startBuckDemo() {
+  const button = el('startBuckDemoButton');
+  button.disabled = true;
+  button.textContent = '启动 Buck 仿真中...';
+  try {
+    const payload = await api('/api/pid/jobs/demo/buck', { method: 'POST' });
+    state.activeJobId = payload.jobId;
+    await refreshJob();
+  } catch (error) {
+    el('connectionState').textContent = `Buck Demo 启动失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Buck 双环电路 Demo';
+  }
+}
+
 async function startDemo() {
   const button = el('startDemoButton');
   button.disabled = true;
@@ -629,6 +647,7 @@ function init() {
   bindNavigation();
   el('refreshButton').addEventListener('click', refreshJob);
   el('startSingleDemoButton').addEventListener('click', startSingleDemo);
+  el('startBuckDemoButton').addEventListener('click', startBuckDemo);
   el('startDemoButton').addEventListener('click', startDemo);
   el('selectModelButton').addEventListener('click', selectModel);
   el('discoverModelButton').addEventListener('click', discoverModel);
