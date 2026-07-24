@@ -25,14 +25,14 @@ AI 接入是可选项：
 
 ## 隐私与仓库边界
 
-仓库只发布源代码、文档、测试和三个公开 Demo 模型。以下内容不会上传：
+仓库只发布源代码、文档、测试和四个公开 Demo 模型和一个启动库。以下内容不会上传：
 
 - pid_tuning_runs/ 中每次调参的参数、指标、历史和日志。
 - 用户导入的任意 .slx / .mdl 模型。
 - .tools/ 中的本地 CLI、SSH 密钥和依赖。
 - API Key、浏览器本地配置、MATLAB 缓存和 Python 缓存。
 
-仅 pid_ai_second_order_demo.slx、pid_ai_cascade_two_pid_demo.slx 和 pid_ai_buck_dual_loop_demo.slx 作为公开示例纳入发行包。
+仅 pid_ai_second_order_demo.slx、pid_ai_cascade_two_pid_demo.slx、pid_ai_buck_dual_loop_demo.slx、pid_ai_multi_system_demo.slx 和 pid_agent_lib.slx 作为公开示例与启动库纳入发行包。
 
 这个工作区已经搭好一个 MATLAB/Simulink 闭环 PID 调参骨架。核心原则：
 
@@ -256,3 +256,31 @@ result = examples.demo_buck_dual_loop_tuning
 ```
 
 也可以启动本地控制台后点击“Buck 双环电路 Demo”。该模型用于快速批量搜索；面向真实硬件部署时，仍需将候选参数放入开关级 Simscape Electrical 模型并进行采样、PWM、器件损耗和保护逻辑验证。
+## 工程级 PID Manager（大型模型）
+
+新增的 PID Agent Manager 面向一个工程中存在多个系统、多个 PID 的场景。它会扫描顶层模型、子系统、库链接、掩膜块和引用模型，然后在 Simulink 内完成选择、分组和执行顺序配置。
+
+```matlab
+addpath(genpath(pwd))
+examples.create_multi_system_pid_demo
+open_system("pid_ai_multi_system_demo")
+pid_project_manager.launch("pid_ai_multi_system_demo")
+```
+
+也可以在 Simulink Library Browser 中打开 `PID Agent Manager` 库，双击 `PID Agent Manager` 启动块。若同时打开多个模型，启动器会先要求选择目标模型。
+
+管理器支持：
+
+- 扫描并列出 PID 所属系统、完整块路径、当前 Kp/Ki/Kd/N 和参数来源。
+- 在模型中定位并高亮选中的 PID。
+- 将同一系统的两个 PID 自动组成内外环联合调参单元。
+- 手工修改角色、组号、执行顺序和 r/y/u/电流信号名。
+- 设置停止时间、迭代轮数和每轮候选数。
+- 把大型工程拆成顺序计划；每个执行单元强制最多两个 PID。
+- 每个单元调用现有 `main_pid_search`，每组候选都经过 Simulink 仿真和固定指标验证。
+
+目录和计划保存在项目本地 `.pid-agent/`，仿真历史保存在 `pid_tuning_runs/`，两者均被 Git 忽略。搜索阶段通过 `SimulationInput` 临时覆盖参数，不永久写回原模型。
+
+当前限制：引用模型中的 PID 可以被发现、查看和编入目录，但在没有显式仿真映射时会标记为 `blocked-referenced-model`，不会自动修改或误调。后续版本将增加引用模型实例映射、Variant 活动配置和确认后写回/回滚功能。
+
+公开的 `pid_ai_multi_system_demo.slx` 包含 3 个系统、5 个 PID：Buck 电压/电流双环、电机速度/电流双环以及单环热控，用于验证选择、分组和顺序计划。

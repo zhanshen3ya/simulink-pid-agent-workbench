@@ -1,4 +1,9 @@
 {
-  "libraries": [],
-  "confirmed_none": true
+  "libraries": [
+    {
+      "name": "PIDAgent",
+      "path": "pid_agent_lib.slx",
+      "description": "PID Agent Manager launcher for selecting and scheduling Simulink PID controllers"
+    }
+  ]
 }

@@ -21,6 +21,7 @@
 .playwright-cli/
 agentic_toolkits/
 pid_tuning_runs/
+.pid-agent/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
@@ -33,6 +34,10 @@ pid_tuning_runs/
 !pid_ai_second_order_demo.slx
 !pid_ai_cascade_two_pid_demo.slx
 !pid_ai_buck_dual_loop_demo.slx
+!pid_ai_multi_system_demo.slx
+!pid_agent_lib.slx
 slprj/
 *.slxc
 *.asv
+
+.satk/library-cache/

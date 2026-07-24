@@ -14,6 +14,7 @@ end
 
 rng(cfg.randomSeed);
 load_system(cfg.modelName);
+fastRestartCleanup = onCleanup(@() localDisableFastRestart(cfg.modelName));
 
 [cfg, currentPid] = pid_tuning_core.setupPidBlocks(cfg);
 cfg = pid_tuning_core.prepareRunLogging(cfg);
@@ -121,3 +122,12 @@ end
 
 
 
+
+function localDisableFastRestart(modelName)
+try
+    if bdIsLoaded(modelName)
+        set_param(modelName, "FastRestart", "off");
+    end
+catch
+end
+end
