@@ -1,6 +1,6 @@
 # Simulink PID Agent Workbench
 
-[下载版本](https://github.com/zhanshen3ya/simulink-pid-agent-workbench/releases) · [MIT License](LICENSE)
+[下载版本](https://github.com/zhanshen3ya/simulink-pid-agent-workbench/releases) · [更新记录](CHANGELOG.md) · [MIT License](LICENSE)
 
 本项目用于读取 Simulink 模型中的 PID 控制器，生成参数，运行仿真，并按设定指标检查结果。
 
@@ -142,12 +142,14 @@ pid_project_manager.launch("pid_ai_multi_system_demo")
 AI 为可选功能。支持以下模式：
 
 - 远程 API：支持 OpenAI-compatible `/chat/completions` 接口。
-- Code Agent：支持 Codex CLI、MiniMax Code 和 Claude Code。
+- Code Agent：支持 Codex CLI、MiniMax Code、Claude Code、Qwen Code、Kimi Code CLI 和 CodeBuddy Code。
 - 关闭 AI：使用程序生成参数。
 
 远程 API Key 只保存在当前页面内存中，并通过环境变量传给 MATLAB 进程。程序不会将 API Key 写入调参配置或日志。
 
-Code Agent 需要单独安装并登录。发行包不包含这些命令行工具。
+Code Agent 需要单独安装并登录。发行包不包含这些命令行工具。Qwen Code、Kimi Code CLI 和 CodeBuddy Code 以只读方式接收本次候选参数请求，不修改模型和项目文件。
+
+每个版本的新增功能、修改内容和验证结果记录在 [更新记录](CHANGELOG.md) 和 GitHub Release 中。
 
 自定义参数生成函数：
 

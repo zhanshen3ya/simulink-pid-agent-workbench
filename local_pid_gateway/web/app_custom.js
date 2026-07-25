@@ -91,7 +91,14 @@ function candidateSource(record) {
 
 function sourceHtml(record) {
   const source = candidateSource(record);
-  const agentLabels = { codex: 'Codex', minimax: 'MiniMax', claude: 'Claude' };
+  const agentLabels = {
+    codex: 'Codex',
+    minimax: 'MiniMax',
+    claude: 'Claude',
+    qwen: 'Qwen',
+    kimi: 'Kimi',
+    codebuddy: 'CodeBuddy',
+  };
   let label = '程序';
   if (source === 'ai:api') label = '远程 API';
   else if (source.startsWith('agent:')) label = 'Code Agent · ' + (agentLabels[source.split(':')[1]] || source.split(':')[1]);
@@ -509,7 +516,14 @@ function updateAiSummary() {
     summaryEl.textContent = '远程 API · ' + (el('aiModelInput').value || '未指定模型');
     summaryEl.classList.add('active-ai');
   } else if (method === 'agent') {
-    const labels = { codex: 'Codex CLI', minimax: 'MiniMax Code', claude: 'Claude Code' };
+    const labels = {
+      codex: 'Codex CLI',
+      minimax: 'MiniMax Code',
+      claude: 'Claude Code',
+      qwen: 'Qwen Code',
+      kimi: 'Kimi Code CLI',
+      codebuddy: 'CodeBuddy Code',
+    };
     summaryEl.textContent = 'Code Agent · ' + (labels[el('agentTypeInput').value] || el('agentTypeInput').value);
     summaryEl.classList.add('active-ai');
   } else {

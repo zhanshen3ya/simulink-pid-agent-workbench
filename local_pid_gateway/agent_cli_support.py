@@ -8,45 +8,115 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDER = Path(__file__).with_name("agent_cli_pid_provider.py")
-
-
-KNOWN_PATHS = {
-    "codex": [
-        ROOT / ".tools" / "node_modules" / ".bin" / "codex.cmd",
-        Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-        / "Microsoft" / "WindowsApps" / "codex.exe",
-    ],
-    "minimax": [Path.home() / ".mavis" / "bin" / "minimax.cmd"],
-    "claude": [Path.home() / "AppData" / "Roaming" / "npm" / "claude.cmd"],
+AGENT_ORDER = ("codex", "minimax", "claude", "qwen", "kimi", "codebuddy")
+AGENT_LABELS = {
+    "codex": "Codex CLI",
+    "minimax": "MiniMax Code",
+    "claude": "Claude Code",
+    "qwen": "Qwen Code",
+    "kimi": "Kimi Code CLI",
+    "codebuddy": "CodeBuddy Code",
+}
+COMMAND_NAMES = {
+    "codex": ("codex",),
+    "minimax": ("minimax",),
+    "claude": ("claude",),
+    "qwen": ("qwen",),
+    "kimi": ("kimi",),
+    "codebuddy": ("codebuddy", "cbc"),
 }
 
 
+def _known_paths():
+    home = Path.home()
+    appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+    localappdata = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+    npm_bin = appdata / "npm"
+    project_bin = ROOT / ".tools" / "node_modules" / ".bin"
+    paths = {
+        "codex": [
+            project_bin / "codex.cmd",
+            localappdata / "Microsoft" / "WindowsApps" / "codex.exe",
+            npm_bin / "codex.cmd",
+        ],
+        "minimax": [home / ".mavis" / "bin" / "minimax.cmd"],
+        "claude": [npm_bin / "claude.cmd"],
+        "qwen": [
+            project_bin / "qwen.cmd",
+            npm_bin / "qwen.cmd",
+            localappdata / "Programs" / "qwen-code" / "qwen.exe",
+            localappdata / "qwen-code" / "qwen.exe",
+        ],
+        "kimi": [
+            home / ".local" / "bin" / "kimi.exe",
+            home / ".local" / "bin" / "kimi",
+            appdata / "Python" / "Scripts" / "kimi.exe",
+        ],
+        "codebuddy": [
+            project_bin / "codebuddy.cmd",
+            project_bin / "cbc.cmd",
+            npm_bin / "codebuddy.cmd",
+            npm_bin / "cbc.cmd",
+            localappdata / "Programs" / "codebuddy" / "codebuddy.exe",
+        ],
+    }
+    python_roots = [appdata / "Python", localappdata / "Programs" / "Python"]
+    for root in python_roots:
+        if root.is_dir():
+            paths["kimi"].extend(root.glob("Python*/Scripts/kimi.exe"))
+    return paths
+
+
+def _validate_agent_type(agent_type):
+    if agent_type not in AGENT_ORDER:
+        supported = ", ".join(AGENT_ORDER)
+        raise ValueError(f"Code Agent 类型必须是以下之一：{supported}。")
+
+
 def _find_executable(agent_type):
-    for path in KNOWN_PATHS.get(agent_type, []):
+    _validate_agent_type(agent_type)
+    for path in _known_paths().get(agent_type, []):
         if path.is_file():
             return path
-    found = shutil.which(agent_type)
-    return Path(found) if found else None
+    for command_name in COMMAND_NAMES[agent_type]:
+        found = shutil.which(command_name)
+        if found:
+            return Path(found)
+    return None
 
 
 def discover_agents():
-    labels = {"codex": "Codex CLI", "minimax": "MiniMax Code", "claude": "Claude Code"}
     agents = []
-    for agent_type in ("codex", "minimax", "claude"):
+    for agent_type in AGENT_ORDER:
         executable = _find_executable(agent_type)
         agents.append({
             "id": agent_type,
-            "label": labels[agent_type],
+            "label": AGENT_LABELS[agent_type],
             "installed": executable is not None,
             "executable": str(executable) if executable else "",
+            "readOnly": True,
         })
     return agents
 
 
+def _resolve_explicit_executable(executable_text):
+    expanded = os.path.expandvars(os.path.expanduser(executable_text))
+    path = Path(expanded)
+    if path.is_file():
+        return path
+    found = shutil.which(executable_text)
+    return Path(found) if found else None
+
+
 def _resolve_command(agent_type, executable_text):
-    executable = Path(executable_text) if executable_text else _find_executable(agent_type)
+    _validate_agent_type(agent_type)
+    executable = (
+        _resolve_explicit_executable(executable_text)
+        if executable_text
+        else _find_executable(agent_type)
+    )
     if executable is None or not executable.is_file():
-        raise ValueError(f"未找到 {agent_type} Code Agent 可执行程序。")
+        raise ValueError(f"未找到 {AGENT_LABELS[agent_type]} 可执行文件。")
 
     prefix = []
     extra_env = {}
@@ -64,9 +134,10 @@ def _resolve_command(agent_type, executable_text):
 def normalize_agent_config(raw_ai, num_candidates):
     raw = raw_ai.get("agent") or {}
     agent_type = str(raw.get("type") or "codex").lower()
-    if agent_type not in ("codex", "minimax", "claude"):
-        raise ValueError("Code Agent 类型必须是 codex、minimax 或 claude。")
-    executable, prefix, extra_env = _resolve_command(agent_type, str(raw.get("executable") or "").strip())
+    _validate_agent_type(agent_type)
+    executable, prefix, extra_env = _resolve_command(
+        agent_type, str(raw.get("executable") or "").strip()
+    )
     timeout = float(raw.get("timeoutSeconds") or 180)
     if timeout < 5 or timeout > 1800:
         raise ValueError("Code Agent 超时必须在 5 到 1800 秒之间。")
@@ -107,11 +178,11 @@ def normalize_agent_config(raw_ai, num_candidates):
 
 def test_agent(raw):
     agent_type = str(raw.get("type") or "codex").lower()
-    executable, prefix, extra_env = _resolve_command(agent_type, str(raw.get("executable") or "").strip())
-    if agent_type == "minimax":
-        args = [str(executable), *prefix, "version"]
-    else:
-        args = [str(executable), *prefix, "--version"]
+    executable, prefix, extra_env = _resolve_command(
+        agent_type, str(raw.get("executable") or "").strip()
+    )
+    args = [str(executable), *prefix]
+    args.append("version" if agent_type == "minimax" else "--version")
     environment = os.environ.copy()
     environment.update(extra_env)
     try:
@@ -138,7 +209,7 @@ def test_agent(raw):
             "ok": False,
             "agent": agent_type,
             "executable": str(executable),
-            "versionOutput": "CLI test timed out after 20 seconds.",
+            "versionOutput": "CLI 测试在 20 秒后超时。",
             "exitCode": None,
         }
     except OSError as error:
@@ -146,6 +217,6 @@ def test_agent(raw):
             "ok": False,
             "agent": agent_type,
             "executable": str(executable),
-            "versionOutput": f"Unable to start CLI: {error}",
+            "versionOutput": f"无法启动 CLI：{error}",
             "exitCode": None,
         }

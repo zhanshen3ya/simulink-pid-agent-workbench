@@ -12,15 +12,67 @@ SCHEMA = Path(__file__).with_name("pid_candidate_response.schema.json")
 
 
 def parse_json_object(text):
-    text = str(text or "").strip()
+    if isinstance(text, dict):
+        return text
+    source = str(text or "").strip()
+    if source.startswith("```"):
+        source = re.sub(r"^```(?:json)?\s*|\s*```$", "", source, flags=re.IGNORECASE)
     try:
-        return json.loads(text)
+        value = json.loads(source)
+        if isinstance(value, dict):
+            return value
     except json.JSONDecodeError:
         pass
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        raise ValueError("Agent output did not contain a JSON object.")
-    return json.loads(match.group(0))
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(source):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(source[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("Agent output did not contain a JSON object.")
+
+
+def extract_candidate_payload(value):
+    if isinstance(value, str):
+        return parse_json_object(value)
+    if isinstance(value, list):
+        for item in reversed(value):
+            try:
+                return extract_candidate_payload(item)
+            except ValueError:
+                continue
+        raise ValueError("Agent output did not contain candidate data.")
+    if not isinstance(value, dict):
+        raise ValueError("Agent output did not contain candidate data.")
+    if isinstance(value.get("candidates"), list):
+        return value
+    for key in ("structured_output", "result", "output"):
+        if key in value and value[key] not in (None, ""):
+            try:
+                return extract_candidate_payload(value[key])
+            except ValueError:
+                pass
+    message = value.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, list):
+            text = "\n".join(
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+            if text.strip():
+                return parse_json_object(text)
+        if isinstance(content, str):
+            return parse_json_object(content)
+    content = value.get("content")
+    if isinstance(content, str):
+        return parse_json_object(content)
+    raise ValueError("Agent output did not contain candidate data.")
 
 
 def validate_response(payload, request):
@@ -42,17 +94,21 @@ def validate_response(payload, request):
                 value = pid.get(field)
                 if not isinstance(value, (int, float)):
                     raise ValueError(f"Candidate {candidate_index} field {field} must be numeric.")
-    return {"candidates": candidates[: int(request.get("requestedCandidates", len(candidates)))]}
+    limit = int(request.get("requestedCandidates", len(candidates)))
+    return {"candidates": candidates[:limit]}
 
 
 def build_prompt(request_path, request):
+    request_json = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
     return (
-        "You are a PID tuning candidate advisor. Read the request JSON at "
-        f"{request_path}. Analyze the PID bounds, current search center, fixed targets, "
-        "and previous Simulink results. Return JSON only, matching the provided schema. "
+        "You generate PID tuning candidates. Use only the request JSON included below. "
+        "Do not read, edit, create, or delete files. Do not run commands or access the network. "
+        "Analyze PID bounds, the current search center, fixed targets, and previous Simulink results. "
+        "Return one JSON object only. The object must match the response schema and contain no prose. "
         f"Return at most {request.get('requestedCandidates', 1)} candidates. "
         "Every candidate must contain one pids item for every pidBlocks item. "
-        "Do not modify project files or claim that a candidate passed; Simulink validates every candidate."
+        "Do not claim that a candidate passed because Simulink performs that check. "
+        f"Request source: {request_path.name}. Request JSON: {request_json}"
     )
 
 
@@ -96,26 +152,31 @@ def run_claude(command, prompt, workspace, timeout, model):
     if model:
         args.extend(["--model", model])
     raw = run_process(args, prompt=prompt, timeout=timeout, cwd=workspace)
-    envelope = parse_json_object(raw)
-    result = envelope.get("structured_output") or envelope.get("result") or envelope
-    return parse_json_object(result) if isinstance(result, str) else result
+    return extract_candidate_payload(json.loads(raw))
 
 
 def extract_last_json(text):
-    starts = [index for index, char in enumerate(text) if char == "{"]
-    for start in reversed(starts):
+    source = str(text or "")
+    decoder = json.JSONDecoder()
+    matches = []
+    for index, char in enumerate(source):
+        if char != "{":
+            continue
         try:
-            return json.loads(text[start:])
+            value, _ = decoder.raw_decode(source[index:])
         except json.JSONDecodeError:
             continue
-    raise ValueError("MiniMax Code CLI output did not contain JSON.")
+        if isinstance(value, dict):
+            matches.append(value)
+    if not matches:
+        raise ValueError("MiniMax Code CLI output did not contain JSON.")
+    return matches[-1]
 
 
 def run_minimax(command, prompt, workspace, timeout, model, agent_name):
-    short_prompt = prompt
     args = [
         *command, "session", "new", agent_name or "mavis", "--from", "root",
-        "--prompt", short_prompt, "--workspace", str(workspace),
+        "--prompt", prompt, "--workspace", str(workspace),
     ]
     if model:
         args.extend(["--model", model])
@@ -138,7 +199,7 @@ def run_minimax(command, prompt, workspace, timeout, model, agent_name):
                 if message.get("role") == "assistant" and message.get("msgContent"):
                     try:
                         return parse_json_object(message["msgContent"])
-                    except (ValueError, json.JSONDecodeError):
+                    except ValueError:
                         continue
             time.sleep(2)
         raise TimeoutError(f"MiniMax Code session timed out after {timeout:g} seconds.")
@@ -148,6 +209,38 @@ def run_minimax(command, prompt, workspace, timeout, model, agent_name):
         except Exception:
             pass
         raise
+
+
+def run_qwen(command, prompt, workspace, timeout, model):
+    args = [
+        *command, "--prompt", prompt, "--output-format", "json",
+        "--approval-mode", "plan", "--max-session-turns", "3",
+        "--max-wall-time", f"{max(5, int(timeout))}s",
+    ]
+    if model:
+        args.extend(["--model", model])
+    raw = run_process(args, timeout=timeout, cwd=workspace)
+    return extract_candidate_payload(json.loads(raw))
+
+
+def run_kimi(command, prompt, workspace, timeout):
+    args = [*command, "--quiet", "--plan", "-p", prompt]
+    raw = run_process(args, timeout=timeout, cwd=workspace)
+    return parse_json_object(raw)
+
+
+def run_codebuddy(command, prompt, workspace, timeout, model):
+    schema_text = SCHEMA.read_text(encoding="utf-8")
+    disabled_tools = "Bash,PowerShell,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch"
+    args = [
+        *command, "-p", prompt, "--output-format", "json",
+        "--json-schema", schema_text, "--permission-mode", "plan",
+        "--disallowedTools", disabled_tools,
+    ]
+    if model:
+        args.extend(["--model", model])
+    raw = run_process(args, timeout=timeout, cwd=workspace)
+    return extract_candidate_payload(json.loads(raw))
 
 
 def main():
@@ -170,11 +263,19 @@ def main():
     prompt = build_prompt(request_path, request)
 
     if agent_type == "codex":
-        raw_response = run_codex(command, prompt, response_path.with_suffix(".agent.json"), workspace, timeout, model)
+        raw_response = run_codex(
+            command, prompt, response_path.with_suffix(".agent.json"), workspace, timeout, model
+        )
     elif agent_type == "minimax":
         raw_response = run_minimax(command, prompt, workspace, timeout, model, agent_name)
     elif agent_type == "claude":
         raw_response = run_claude(command, prompt, workspace, timeout, model)
+    elif agent_type == "qwen":
+        raw_response = run_qwen(command, prompt, workspace, timeout, model)
+    elif agent_type == "kimi":
+        raw_response = run_kimi(command, prompt, workspace, timeout)
+    elif agent_type == "codebuddy":
+        raw_response = run_codebuddy(command, prompt, workspace, timeout, model)
     else:
         raise ValueError(f"Unsupported Code Agent: {agent_type}")
 
