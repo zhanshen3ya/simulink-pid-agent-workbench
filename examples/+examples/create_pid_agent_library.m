@@ -19,7 +19,7 @@ delete_block(model + "/PID Agent Manager/In1");
 delete_block(model + "/PID Agent Manager/Out1");
 mask = Simulink.Mask.create(model + "/PID Agent Manager");
 mask.Type = "PID Agent Manager";
-mask.Description = "Open the project-level PID selection and tuning plan manager.";
+mask.Description = "Open the multi-PID selection and tuning plan manager.";
 mask.Display = "disp('PID Agent Manager')";
 set_param(model, "Creator", "Simulink PID Agent Workbench", ...
     "ModifiedByFormat", "Simulink PID Agent Workbench", "Lock", "on");

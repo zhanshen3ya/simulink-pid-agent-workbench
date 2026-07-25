@@ -1,5 +1,5 @@
 function catalog = scanProjectPids(modelFile)
-%SCANPROJECTPIDS Build a project-level catalog of PID Controller blocks.
+%SCANPROJECTPIDS Build a catalog of PID Controller blocks.
 
 arguments
     modelFile (1, 1) string

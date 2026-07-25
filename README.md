@@ -256,7 +256,7 @@ result = examples.demo_buck_dual_loop_tuning
 ```
 
 也可以启动本地控制台后点击“Buck 双环电路 Demo”。该模型用于快速批量搜索；面向真实硬件部署时，仍需将候选参数放入开关级 Simscape Electrical 模型并进行采样、PWM、器件损耗和保护逻辑验证。
-## 工程级 PID Manager（大型模型）
+## 多 PID Manager（大型模型）
 
 新增的 PID Agent Manager 面向一个工程中存在多个系统、多个 PID 的场景。它会扫描顶层模型、子系统、库链接、掩膜块和引用模型，然后在 Simulink 内完成选择、分组和执行顺序配置。
 
