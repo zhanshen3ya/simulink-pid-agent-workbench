@@ -287,3 +287,21 @@ select {
     flex: 0 0 auto;
   }
 }
+.pid-locate-button {
+  border: 1px solid #b9c6cf;
+  background: #fff;
+  color: #126c67;
+  min-width: 48px;
+  height: 30px;
+  cursor: pointer;
+}
+
+.pid-locate-button:hover {
+  border-color: #126c67;
+  background: #eef8f7;
+}
+
+#modelPathInput[readonly] {
+  background: #f4f7f8;
+  color: #425466;
+}

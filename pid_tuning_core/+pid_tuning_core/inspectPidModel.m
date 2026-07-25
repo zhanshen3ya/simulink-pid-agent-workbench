@@ -4,10 +4,7 @@ function info = inspectPidModel(modelFile)
 [modelName, resolvedPath] = pid_tuning_core.resolveSimulinkModel(modelFile);
 load_system(resolvedPath);
 
-blocks = find_system(modelName, ...
-    "LookUnderMasks", "all", ...
-    "FollowLinks", "on", ...
-    "Type", "Block");
+blocks = localFindAllVariants(modelName, "Type", "Block");
 
 emptyPid = struct("name", "", "path", "", "blockType", "", ...
     "maskType", "", "referenceBlock", "", "currentPid", ...
@@ -69,7 +66,7 @@ end
 
 function names = localLoggedSignals(modelName)
 names = strings(0, 1);
-lineHandles = find_system(modelName, "FindAll", "on", "Type", "line");
+lineHandles = localFindAllVariants(modelName, "FindAll", "on", "Type", "line");
 for idx = 1:numel(lineHandles)
     try
         if ~strcmpi(get_param(lineHandles(idx), "DataLogging"), "on")
@@ -82,8 +79,7 @@ for idx = 1:numel(lineHandles)
     catch
     end
 end
-workspaceBlocks = find_system(modelName, ...
-    "LookUnderMasks", "all", "FollowLinks", "on", "BlockType", "ToWorkspace");
+workspaceBlocks = localFindAllVariants(modelName, "BlockType", "ToWorkspace");
 for idx = 1:numel(workspaceBlocks)
     try
         variableName = string(get_param(workspaceBlocks{idx}, "VariableName"));
@@ -94,4 +90,13 @@ for idx = 1:numel(workspaceBlocks)
     end
 end
 names = unique(names, "stable");
+end
+function matches = localFindAllVariants(modelName, varargin)
+commonArguments = {"LookUnderMasks", "all", "FollowLinks", "on"};
+try
+    matches = find_system(modelName, commonArguments{:}, ...
+        "MatchFilter", @Simulink.match.allVariants, varargin{:});
+catch
+    matches = find_system(modelName, commonArguments{:}, varargin{:});
+end
 end

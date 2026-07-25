@@ -24,5 +24,6 @@ else
     end
     selected = models(choice);
 end
-app = pid_project_manager.launch(selected);
+open_system(selected);
+app = pid_agent_ui.launch("current");
 end

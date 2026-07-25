@@ -1,0 +1,86 @@
+{
+  "version": "1.0",
+  "entries": [
+    {
+      "type": "Tab",
+      "id": "pidAgentTab",
+      "title": "PID Agent",
+      "children": [
+        {
+          "type": "Section",
+          "title": "当前模型",
+          "children": [
+            {
+              "type": "Column",
+              "children": [
+                {"type": "PushButton", "action": "pidAgent:openCurrentAction"}
+              ]
+            },
+            {
+              "type": "Column",
+              "children": [
+                {"type": "PushButton", "action": "pidAgent:openSelectedAction"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Section",
+          "title": "多 PID",
+          "children": [
+            {
+              "type": "Column",
+              "children": [
+                {"type": "PushButton", "action": "pidAgent:openManagerAction"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Section",
+          "title": "结果",
+          "children": [
+            {
+              "type": "Column",
+              "children": [
+                {"type": "PushButton", "action": "pidAgent:openHistoryAction"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Action",
+      "id": "openCurrentAction",
+      "text": "调节当前\n模型",
+      "description": "打开当前 Simulink 模型的 PID 调参界面",
+      "command": "pid_agent_ui.launch('current')",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openSelectedAction",
+      "text": "调节选中\nPID",
+      "description": "调节当前选中的一个或两个 PID 控制器",
+      "command": "pid_agent_ui.launch('selected')",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openManagerAction",
+      "text": "多 PID\n管理器",
+      "description": "扫描、分组并顺序执行模型中的多组 PID",
+      "command": "pid_agent_ui.openManager()",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openHistoryAction",
+      "text": "调参\n历史",
+      "description": "查看 PID 调参任务和历史结果",
+      "command": "pid_agent_ui.openHistory()",
+      "commandType": "Script"
+    }
+  ]
+}

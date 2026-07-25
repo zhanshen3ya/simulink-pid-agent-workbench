@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PID 调参控制台</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="/styles.css" />
-  <link rel="stylesheet" href="/styles_custom.css" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./styles_custom.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -44,13 +44,14 @@
             <input id="modelPathInput" type="text" placeholder="D:\项目\控制模型.slx" />
             <button id="selectModelButton" class="outline-button">选择文件</button>
             <button id="discoverModelButton" class="secondary-action-button">读取模型</button>
+            <button id="syncSimulinkButton" class="outline-button hidden" type="button">同步当前模型</button>
           </div>
           <div id="modelConfigBody" class="config-body hidden">
             <div class="config-section">
               <div class="subsection-title"><h4>选择 PID</h4><span>最多选择两个，内外环可同时调节</span></div>
               <div class="table-scroll compact">
                 <table class="discovery-table">
-                  <thead><tr><th>调节</th><th>控制器</th><th>块路径</th><th>当前 Kp</th><th>当前 Ki</th><th>当前 Kd</th><th>当前 N</th></tr></thead>
+                  <thead><tr><th>调节</th><th>控制器</th><th>块路径</th><th>当前 Kp</th><th>当前 Ki</th><th>当前 Kd</th><th>当前 N</th><th>定位</th></tr></thead>
                   <tbody id="discoveredPidRows"></tbody>
                 </table>
               </div>
@@ -235,6 +236,29 @@
     </div>
   </div>
 
-  <script src="/app_custom.js"></script>
+  <script>
+    function setup(htmlComponent) {
+      window.pidMatlabComponent = htmlComponent;
+      const deliverContext = () => {
+        if (typeof window.applyPidMatlabContext === 'function') {
+          window.applyPidMatlabContext(htmlComponent.Data || {});
+          if (!window.pidBridgeReadySent) {
+            window.pidBridgeReadySent = true;
+            htmlComponent.sendEventToMATLAB('BridgeReady', { loaded: true });
+          }
+        } else {
+          window.setTimeout(deliverContext, 50);
+        }
+      };
+      htmlComponent.addEventListener('DataChanged', deliverContext);
+      htmlComponent.addEventListener('PidAgentNavigate', (event) => {
+        const data = event.Data || event.detail || event || {};
+        const view = data.view || htmlComponent.Data?.initialView || 'run';
+        if (typeof window.navigatePidAgentView === 'function') window.navigatePidAgentView(view);
+      });
+      deliverContext();
+    }
+  </script>
+  <script src="./app_custom.js"></script>
 </body>
 </html>

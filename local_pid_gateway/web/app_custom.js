@@ -5,6 +5,9 @@ const state = {
   pollHandle: null,
   modelInfo: null,
   selectedPidIndexes: [],
+  embedded: false,
+  apiBaseUrl: '',
+  simulinkContext: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -176,8 +179,14 @@ function renderStatus(payload) {
   el('bestMetrics').innerHTML = metricRows(pickMetrics(best));
 }
 
+function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  const base = String(state.apiBaseUrl || '').replace(/\/$/, '');
+  return base ? `${base}${path}` : path;
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await fetch(apiUrl(path), options);
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
@@ -244,6 +253,11 @@ function normalizePidBlocks(blocks) {
 }
 
 async function discoverModel() {
+  if (state.embedded) {
+    setScanState('正在从 Simulink 同步当前模型');
+    sendMatlabEvent('SyncCurrentModel', {});
+    return;
+  }
   const modelPath = el('modelPathInput').value.trim();
   const button = el('discoverModelButton');
   button.disabled = true;
@@ -277,13 +291,65 @@ function renderModelInfo() {
     return `<tr class="${selected ? 'selected' : ''}">
       <td><input class="pid-select" type="checkbox" data-index="${index}" ${selected ? 'checked' : ''} /></td>
       <td>${escapeHtml(block.name)}</td><td title="${escapeHtml(block.path)}">${escapeHtml(block.path)}</td>
-      <td>${value(current.Kp)}</td><td>${value(current.Ki)}</td><td>${value(current.Kd)}</td><td>${value(current.N)}</td></tr>`;
-  }).join('') : '<tr><td colspan="7">未发现带 P/I/D 参数的 PID Controller 块</td></tr>';
+      <td>${value(current.Kp)}</td><td>${value(current.Ki)}</td><td>${value(current.Kd)}</td><td>${value(current.N)}</td>
+      <td>${state.embedded ? `<button class="pid-locate-button" type="button" data-index="${index}" title="在 Simulink 中定位">定位</button>` : '-'}</td></tr>`;
+  }).join('') : '<tr><td colspan="8">未发现带 P/I/D 参数的 PID Controller 块</td></tr>';
   document.querySelectorAll('.pid-select').forEach((checkbox) => checkbox.addEventListener('change', togglePidSelection));
+  document.querySelectorAll('.pid-locate-button').forEach((button) => button.addEventListener('click', locatePidFromTable));
   el('loggedSignalsList').innerHTML = (state.modelInfo.loggedSignals || []).map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
   renderPidEditors();
 }
 
+function sendMatlabEvent(name, data) {
+  const component = window.pidMatlabComponent;
+  if (!component || typeof component.sendEventToMATLAB !== 'function') return false;
+  component.sendEventToMATLAB(name, data || {});
+  return true;
+}
+
+function stringArray(value) {
+  if (Array.isArray(value)) return value.map(String);
+  if (value === null || value === undefined || value === '') return [];
+  return [String(value)];
+}
+
+function applyEmbeddedContext(context) {
+  if (!context || !context.embedded) return;
+  state.embedded = true;
+  state.apiBaseUrl = String(context.apiBaseUrl || 'http://127.0.0.1:8788');
+  state.simulinkContext = context;
+  el('selectModelButton').classList.add('hidden');
+  el('syncSimulinkButton').classList.remove('hidden');
+  el('modelPathInput').readOnly = true;
+  el('modelPathInput').value = context.modelPath || context.modelName || '';
+  el('jobSubtitle').textContent = `Simulink 当前模型 · ${context.modelName || ''}`;
+
+  const info = context.modelInfo || null;
+  if (info) {
+    info.pidBlocks = normalizePidBlocks(info.pidBlocks);
+    info.loggedSignals = stringArray(info.loggedSignals);
+    state.modelInfo = info;
+    const selectedPaths = new Set(stringArray(context.selectedPidPaths));
+    state.selectedPidIndexes = info.pidBlocks
+      .map((block, index) => selectedPaths.has(String(block.path)) ? index : -1)
+      .filter((index) => index >= 0)
+      .slice(0, 2);
+    if (!state.selectedPidIndexes.length && info.pidBlocks.length === 1) {
+      state.selectedPidIndexes = [0];
+    }
+    renderModelInfo();
+    const selectedNote = selectedPaths.size > 2 ? '；仅带入前两个已选 PID' : '';
+    setScanState(`来自 Simulink：发现 ${info.pidBlocks.length} 个 PID${selectedNote}`);
+  }
+  if (context.initialView) activateView(context.initialView);
+  refreshJob();
+}
+
+function locatePidFromTable(event) {
+  const index = Number(event.currentTarget.dataset.index);
+  const block = state.modelInfo?.pidBlocks?.[index];
+  if (block?.path) sendMatlabEvent('LocatePid', { path: block.path });
+}
 function togglePidSelection(event) {
   const index = Number(event.target.dataset.index);
   if (event.target.checked) {
@@ -573,6 +639,9 @@ function collectCustomConfig() {
   });
   return {
     modelPath: state.modelInfo.modelPath || el('modelPathInput').value.trim(), pidBlocks,
+    workingDirectory: state.simulinkContext?.workingDirectory || '',
+    projectRoot: state.simulinkContext?.projectRoot || '',
+    projectPath: state.simulinkContext?.projectPath || '',
     referenceSignalName: el('referenceSignalInput').value.trim(), outputSignalName: el('outputSignalInput').value.trim(),
     controlSignalName: el('controlSignalInput').value.trim(), stopTime: el('stopTimeInput').value,
     maxIterations: numberFrom('maxIterationsInput'), numCandidates: numberFrom('numCandidatesInput'),
@@ -648,13 +717,14 @@ async function startDemo() {
   }
 }
 
+function activateView(viewName) {
+  const view = ['run', 'history', 'result'].includes(String(viewName)) ? String(viewName) : 'run';
+  document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
+  document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active', item.id === `view-${view}`));
+}
+
 function bindNavigation() {
-  document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
-    document.querySelectorAll('.view').forEach((view) => view.classList.remove('active'));
-    button.classList.add('active');
-    el(`view-${button.dataset.view}`).classList.add('active');
-  }));
+  document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => activateView(button.dataset.view)));
 }
 
 function init() {
@@ -665,6 +735,7 @@ function init() {
   el('startDemoButton').addEventListener('click', startDemo);
   el('selectModelButton').addEventListener('click', selectModel);
   el('discoverModelButton').addEventListener('click', discoverModel);
+  el('syncSimulinkButton').addEventListener('click', () => sendMatlabEvent('SyncCurrentModel', {}));
   el('startCustomButton').addEventListener('click', startCustom);
   el('modelPathInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') discoverModel(); });
 
@@ -698,4 +769,6 @@ function init() {
   state.pollHandle = window.setInterval(refreshJob, 1200);
 }
 
+window.applyPidMatlabContext = applyEmbeddedContext;
+window.navigatePidAgentView = activateView;
 window.addEventListener('DOMContentLoaded', init);

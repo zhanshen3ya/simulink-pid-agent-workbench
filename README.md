@@ -25,14 +25,36 @@
 
 本项目不能代替控制系统验证。用于实际设备前，需要完成模型、采样、执行器限制、保护逻辑和硬件测试。
 
-## 快速开始
+## 安装
 
 1. 从 [GitHub Releases](https://github.com/zhanshen3ya/simulink-pid-agent-workbench/releases) 下载 ZIP 并解压。
-2. 安装 MATLAB、Simulink 和 Python 3。
-3. 双击 `启动PID调参控制台.bat`。
-4. 浏览器打开 <http://127.0.0.1:8788>。
+2. 在 MATLAB 中切换到解压目录。
+3. 执行一次安装命令：
 
-控制台只监听本机地址。
+```matlab
+install_pid_agent
+```
+
+该命令添加所需 MATLAB 路径，并加载 Simulink 的 `PID Agent` 工具栏。如果已打开的模型窗口没有显示新工具栏，请关闭后重新打开该模型。
+
+## 在 Simulink 中使用
+
+1. 打开并保存需要调参的 Simulink 模型。
+2. 在 Simulink 顶部选择 `PID Agent` 工具栏。
+3. 根据需要选择以下入口：
+
+- `调节当前模型`：扫描当前模型并打开内嵌调参界面。
+- `调节选中 PID`：优先选择模型中已选中的一个或两个 PID。
+- `多 PID 管理器`：为包含多组 PID 的模型设置分组和执行顺序。
+- `调参历史`：打开内嵌界面的历史记录页。
+
+内嵌界面固定使用当前模型路径，不需要再次选择文件。模型中只有一个 PID 时会自动选中；选中两个 PID 时可同时调节内外环；选中超过两个 PID 时会打开多 PID 管理器。未保存的模型修改会先提示保存。
+
+本地网关由 MATLAB 自动在后台启动，网页窗口关闭后仍可复用。当前工作目录和 MATLAB Project 路径会传给调参进程，便于模型加载同目录脚本和数据。
+
+## 浏览器单独使用
+
+也可以双击 `启动PID调参控制台.bat`，然后打开 <http://127.0.0.1:8788>。
 
 在页面中：
 
@@ -42,7 +64,7 @@
 4. 设置参数范围、信号名称和检查指标。
 5. 选择 AI 模式并开始调参。
 
-页面显示运行时间、测试次数、当前参数、仿真指标和历史记录。
+页面显示运行时间、测试次数、当前参数、仿真指标和历史记录。控制台只监听本机地址。
 
 ## MATLAB 直接运行
 
@@ -220,7 +242,7 @@ result = examples.demo_buck_dual_loop_tuning
 ## 当前限制
 
 - 引用模型中的 PID 可以扫描，但当前不能自动调参。
-- Variant 活动配置尚未处理。
+- Variant 中的 PID 可以扫描；开始调参前仍需确认模型使用了正确的活动配置。
 - 最佳参数不会自动写回原模型。
 - 自动回滚和跨平台测试尚未完成。
 - 使用前需要根据控制对象设置参数范围、信号名称和指标上限。
@@ -229,6 +251,8 @@ result = examples.demo_buck_dual_loop_tuning
 
 ```text
 .
+|-- +pid_agent_ui/
+|-- resources/
 |-- main_pid_search.m
 |-- pid_tuning_core/
 |-- pid_project_manager/

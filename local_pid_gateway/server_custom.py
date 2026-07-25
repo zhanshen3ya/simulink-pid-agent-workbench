@@ -78,7 +78,9 @@ def list_jobs():
     for path in sorted(RUNS.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
         if not path.is_dir():
             continue
-        status = read_json(path / "current_status.json") or {}
+        status = read_json(path / "current_status.json")
+        if not isinstance(status, dict):
+            continue
         jobs.append({
             "jobId": path.name,
             "status": status.get("status", "unknown"),
@@ -116,6 +118,17 @@ def normalize_model_path(value):
         return str(path.resolve())
     return expanded
 
+
+def normalize_optional_path(value, label, expect_directory=False):
+    text = str(value or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    path = Path(os.path.expandvars(os.path.expanduser(text)))
+    if expect_directory and not path.is_dir():
+        raise ValueError(f"{label}目录不存在: {text}")
+    if not expect_directory and not path.is_file():
+        raise ValueError(f"{label}文件不存在: {text}")
+    return str(path.resolve())
 
 def validate_bounds(bounds, pid_index):
     result = {}
@@ -177,6 +190,9 @@ def normalize_custom_payload(payload):
 
     return {
         "modelPath": model_path,
+        "workingDirectory": normalize_optional_path(payload.get("workingDirectory"), "工作", True),
+        "projectRoot": normalize_optional_path(payload.get("projectRoot"), "MATLAB Project", True),
+        "projectPath": normalize_optional_path(payload.get("projectPath"), "MATLAB Project", False),
         "pidBlocks": blocks,
         "stopTime": str(payload.get("stopTime") or "10"),
         "referenceSignalName": str(payload.get("referenceSignalName") or "r"),

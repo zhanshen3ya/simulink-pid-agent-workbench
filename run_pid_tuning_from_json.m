@@ -15,6 +15,22 @@ end
 rootDir = fileparts(mfilename("fullpath"));
 addpath(genpath(rootDir));
 
+if isfield(raw, "projectPath") && strlength(string(raw.projectPath)) > 0
+    projectPath = string(raw.projectPath);
+    if isfile(projectPath)
+        try
+            openProject(projectPath);
+        catch exception
+            warning("PIDAgent:ProjectOpenFailed", ...
+                "Could not open MATLAB Project %s: %s", ...
+                projectPath, exception.message);
+        end
+    end
+end
+if isfield(raw, "workingDirectory") && isfolder(string(raw.workingDirectory))
+    cd(string(raw.workingDirectory));
+end
+
 modelPath = string(raw.modelPath);
 [modelName, ~, modelDir] = pid_tuning_core.resolveSimulinkModel(modelPath);
 if strlength(modelDir) > 0
