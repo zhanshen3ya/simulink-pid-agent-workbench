@@ -1,0 +1,65 @@
+{
+  "version": "1.0",
+  "entries": [
+    {
+      "type": "Action",
+      "id": "openCurrentAction",
+      "text": "当前模型\n调参",
+      "description": "打开当前 Simulink 模型的 PID 调参界面",
+      "icon": "currentModelIcon",
+      "command": "pid_agent_ui.launch('current')",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openSelectedAction",
+      "text": "选中 PID\n调参",
+      "description": "调节当前选中的一个或两个 PID 控制器",
+      "icon": "selectedPidIcon",
+      "command": "pid_agent_ui.launch('selected')",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openManagerAction",
+      "text": "多 PID\n管理",
+      "description": "扫描、分组并顺序执行模型中的多组 PID",
+      "icon": "pidManagerIcon",
+      "command": "pid_agent_ui.openManager()",
+      "commandType": "Script"
+    },
+    {
+      "type": "Action",
+      "id": "openHistoryAction",
+      "text": "调参\n历史",
+      "description": "查看 PID 调参任务和历史结果",
+      "icon": "tuningHistoryIcon",
+      "command": "pid_agent_ui.openHistory()",
+      "commandType": "Script"
+    },
+    {
+      "type": "Icon",
+      "id": "currentModelIcon",
+      "icon16": "current_model_16.png",
+      "icon24": "current_model_24.png"
+    },
+    {
+      "type": "Icon",
+      "id": "selectedPidIcon",
+      "icon16": "selected_pid_16.png",
+      "icon24": "selected_pid_24.png"
+    },
+    {
+      "type": "Icon",
+      "id": "pidManagerIcon",
+      "icon16": "pid_manager_16.png",
+      "icon24": "pid_manager_24.png"
+    },
+    {
+      "type": "Icon",
+      "id": "tuningHistoryIcon",
+      "icon16": "tuning_history_16.png",
+      "icon24": "tuning_history_24.png"
+    }
+  ]
+}

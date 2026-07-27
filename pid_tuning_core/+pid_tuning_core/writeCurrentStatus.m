@@ -21,6 +21,13 @@ payload.failedCount = localField(state, "failedCount", 0);
 payload.runDir = string(cfg.logging.runDir);
 payload.aiEnabled = logical(cfg.ai.enabled);
 payload.aiMode = string(cfg.ai.mode);
+payload.targets = cfg.targets;
+
+if isfield(state, "baseline") && ~isempty(state.baseline)
+    payload.baseline = pid_tuning_core.recordToJsonStruct(state.baseline, state, cfg);
+else
+    payload.baseline = [];
+end
 
 if ~isempty(currentRecord)
     payload.current = pid_tuning_core.recordToJsonStruct(currentRecord, state, cfg);

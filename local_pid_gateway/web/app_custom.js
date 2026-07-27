@@ -72,6 +72,144 @@ function metricRows(metrics) {
   ].map(([label, key]) => `<div class="metric-row"><span>${label}</span><strong>${metricValue(metrics, key)}</strong></div>`).join('');
 }
 
+const EFFECT_METRICS = [
+  { label: '超调量 (%)', key: 'overshootPct', target: 'overshootPctMax' },
+  { label: '调节时间 (s)', key: 'settlingTime', target: 'settlingTimeMax' },
+  { label: '稳态误差', key: 'steadyStateError', target: 'steadyStateErrorAbsMax', absolute: true },
+  { label: 'IAE', key: 'iae', target: 'iaeMax' },
+  { label: 'ISE', key: 'ise', target: 'iseMax' },
+  { label: 'ITAE', key: 'itae', target: 'itaeMax' },
+  { label: '最大控制量', key: 'maxAbsControl', target: 'maxAbsControlMax' },
+  { label: '控制能量', key: 'controlEnergy', target: 'controlEnergyMax' },
+  { label: '电流峰值', key: 'maxAbsCurrent', target: 'maxAbsCurrentMax' },
+  { label: '输出纹波', key: 'outputRipple', target: 'outputRippleMax' },
+  { label: '控制饱和比例', key: 'controlSaturationFraction', target: 'controlSaturationFractionMax' },
+];
+
+const FAILURE_LABELS = {
+  simulation_failed: '仿真执行失败',
+  non_finite_output: '输出包含无效数值',
+  unstable_or_unsettled: '闭环不稳定或未收敛',
+  overshoot: '超调量超限',
+  settling_time: '调节时间超限',
+  steady_state_error: '稳态误差超限',
+  iae: 'IAE 超限',
+  ise: 'ISE 超限',
+  itae: 'ITAE 超限',
+  max_abs_control: '控制量峰值超限',
+  control_energy: '控制能量超限',
+  max_abs_current: '电流峰值超限',
+  output_ripple: '输出纹波超限',
+  control_saturation: '控制饱和时间超限',
+};
+
+function finiteMetric(record, definition) {
+  const raw = record?.metrics?.[definition.key];
+  if (raw === null || raw === undefined || raw === '') return null;
+  const number = Number(raw);
+  if (!Number.isFinite(number)) return null;
+  return definition.absolute ? Math.abs(number) : number;
+}
+
+function targetFor(payload, definition) {
+  const raw = payload?.targets?.[definition.target];
+  const number = Number(raw);
+  if (raw !== null && raw !== undefined && raw !== '' && Number.isFinite(number)) return number;
+  const fallbackIds = {
+    overshootPctMax: 'overshootTargetInput',
+    settlingTimeMax: 'settlingTargetInput',
+    steadyStateErrorAbsMax: 'errorTargetInput',
+  };
+  const input = fallbackIds[definition.target] ? el(fallbackIds[definition.target]) : null;
+  const fallback = Number(input?.value);
+  return Number.isFinite(fallback) ? fallback : null;
+}
+
+function effectNumber(number) {
+  return Number.isFinite(number) ? fmt.format(number) : '-';
+}
+
+function scoreImprovement(baseline, record) {
+  if (!baseline?.passed || !record?.passed) return null;
+  const baselineScore = Number(baseline?.score);
+  const currentScore = Number(record?.score);
+  if (!Number.isFinite(baselineScore) || !Number.isFinite(currentScore) || Math.abs(baselineScore) < 1e-12) return null;
+  return ((baselineScore - currentScore) / Math.abs(baselineScore)) * 100;
+}
+
+function renderEffectEvaluation(payload) {
+  const baseline = recordOrNull(payload?.baseline);
+  const current = recordOrNull(payload?.current);
+  const bestPassing = recordOrNull(payload?.bestPassing);
+  const bestScored = recordOrNull(payload?.best);
+  const best = bestPassing || bestScored;
+  const completed = String(payload?.status || '').toLowerCase() === 'completed';
+  const evaluated = completed ? (bestPassing || bestScored || current) : (current || bestPassing || bestScored);
+  const improvement = scoreImprovement(baseline, evaluated);
+  const failures = Array.isArray(evaluated?.failures) ? evaluated.failures.map(String) : [];
+  const passed = Boolean(evaluated?.passed);
+  el('currentPass').innerHTML = passText(evaluated);
+
+  const grade = el('effectGrade');
+  const verdict = el('effectVerdict');
+  const title = el('effectVerdictTitle');
+  const detail = el('effectVerdictDetail');
+  if (!evaluated) {
+    grade.textContent = '--';
+    verdict.className = 'effect-verdict neutral';
+    title.textContent = '等待仿真结果';
+    detail.textContent = '完成基线和候选仿真后给出结论';
+  } else if (!passed) {
+    grade.textContent = 'D';
+    verdict.className = 'effect-verdict failed';
+    title.textContent = `不可用：未通过 ${Math.max(1, failures.length)} 项硬指标`;
+    detail.textContent = '该组参数不能作为最终 PID';
+  } else if (baseline && !baseline.passed) {
+    grade.textContent = 'A';
+    verdict.className = 'effect-verdict passed';
+    title.textContent = '候选参数已通过，原始 PID 未通过硬指标';
+    detail.textContent = '当前结果首次达到可用门槛，仍需完成工况验证';
+  } else if (improvement !== null && improvement < 0) {
+    grade.textContent = 'C';
+    verdict.className = 'effect-verdict warning';
+    title.textContent = '指标通过，但不建议替换原参数';
+    detail.textContent = `综合分数相对基线退化 ${fmt.format(Math.abs(improvement))}%`;
+  } else {
+    const letter = improvement === null ? 'PASS' : (improvement >= 20 ? 'A' : (improvement >= 5 ? 'B' : 'C'));
+    grade.textContent = letter;
+    verdict.className = 'effect-verdict passed';
+    title.textContent = '通过全部硬指标，可进入下一步验证';
+    detail.textContent = improvement === null ? '缺少基线，暂不计算改善幅度' : `综合分数相对原始 PID 改善 ${fmt.format(improvement)}%`;
+  }
+
+  const gateList = el('effectGateList');
+  if (!evaluated) {
+    gateList.innerHTML = '<span class="gate-chip neutral">尚无硬指标结果</span>';
+  } else if (failures.length) {
+    gateList.innerHTML = failures.map((failure) => `<span class="gate-chip failed">${escapeHtml(FAILURE_LABELS[failure] || failure)}</span>`).join('');
+  } else {
+    gateList.innerHTML = ['仿真成功', '数值有效', '闭环稳定', '固定指标全部通过']
+      .map((label) => `<span class="gate-chip passed">${label}</span>`).join('');
+  }
+
+  el('effectComparisonRows').innerHTML = EFFECT_METRICS.map((definition) => {
+    const baselineValue = finiteMetric(baseline, definition);
+    const currentValue = finiteMetric(current, definition);
+    const bestValue = finiteMetric(best, definition);
+    const target = targetFor(payload, definition);
+    let judgment = '<span class="metric-judgment neutral">未设置限制</span>';
+    if (currentValue === null) judgment = '<span class="metric-judgment neutral">暂无</span>';
+    else if (target !== null && currentValue <= target) judgment = '<span class="metric-judgment passed">通过</span>';
+    else if (target !== null) judgment = '<span class="metric-judgment failed">超限</span>';
+    return `<tr><td>${definition.label}</td><td>${effectNumber(baselineValue)}</td><td>${effectNumber(currentValue)}</td>` +
+      `<td>${effectNumber(bestValue)}</td><td>${target === null ? '未设置' : effectNumber(target)}</td><td>${judgment}</td></tr>`;
+  }).join('');
+  const baselineScore = Number(baseline?.score);
+  const bestScoreValue = Number(best?.score);
+  el('effectComparisonSummary').textContent = Number.isFinite(baselineScore) && Number.isFinite(bestScoreValue)
+    ? `基线分数 ${fmt.format(baselineScore)} · 最佳分数 ${fmt.format(bestScoreValue)}`
+    : '原始 PID、当前候选与最佳结果';
+}
 function candidatePids(record) {
   const candidate = record?.candidate || {};
   if (Array.isArray(candidate.pids)) return candidate.pids;
@@ -92,7 +230,7 @@ function candidateSource(record) {
   return String(record?.candidate?.source || 'program');
 }
 
-function sourceHtml(record) {
+function sourceLabel(record) {
   const source = candidateSource(record);
   const agentLabels = {
     codex: 'Codex',
@@ -102,12 +240,17 @@ function sourceHtml(record) {
     kimi: 'Kimi',
     codebuddy: 'CodeBuddy',
   };
-  let label = '程序';
-  if (source === 'ai:api') label = '远程 API';
-  else if (source.startsWith('agent:')) label = 'Code Agent · ' + (agentLabels[source.split(':')[1]] || source.split(':')[1]);
-  else if (source.startsWith('ai:')) label = 'AI';
+  if (source === 'baseline') return '原始基线';
+  if (source === 'ai:api') return '远程 API';
+  if (source.startsWith('agent:')) return 'Code Agent · ' + (agentLabels[source.split(':')[1]] || source.split(':')[1]);
+  if (source.startsWith('ai:')) return 'AI';
+  return '程序搜索';
+}
+
+function sourceHtml(record) {
+  const source = candidateSource(record);
   const aiSource = source.startsWith('ai:') || source.startsWith('agent:');
-  return '<span class="' + (aiSource ? 'source-ai' : 'source-program') + '">' + escapeHtml(label) + '</span>';
+  return '<span class="' + (aiSource ? 'source-ai' : 'source-program') + '">' + escapeHtml(sourceLabel(record)) + '</span>';
 }
 function passText(record) {
   if (!record) return '<span class="warn">暂无</span>';
@@ -164,10 +307,9 @@ function renderStatus(payload) {
   el('statusPill').className = `status-pill ${status}`;
 
   const current = recordOrNull(payload.current);
-  el('currentSummary').textContent = current ? `${candidateSource(current)} · 候选 ${value(current.candidateIndex)} / 分数 ${value(current.score)}` : '暂无';
-  el('currentPass').innerHTML = passText(current);
+  el('currentSummary').textContent = current ? `${sourceLabel(current)} · 候选 ${value(current.candidateIndex)} / 分数 ${value(current.score)}` : '暂无';
   renderPidRows('currentPidRows', current);
-  el('currentMetrics').innerHTML = metricRows(pickMetrics(current));
+  renderEffectEvaluation(payload);
   renderRecent(payload.recent || []);
 
   const bestPassing = recordOrNull(payload.bestPassing);
@@ -185,12 +327,60 @@ function apiUrl(path) {
   return base ? `${base}${path}` : path;
 }
 
+const pendingGatewayRequests = new Map();
+let gatewayRequestSequence = 0;
+
+function apiViaMatlab(path, options = {}) {
+  return new Promise((resolve, reject) => {
+    gatewayRequestSequence += 1;
+    const id = `gateway-${Date.now()}-${gatewayRequestSequence}`;
+    let body = null;
+    if (options.body) {
+      try { body = JSON.parse(options.body); } catch (_) { body = options.body; }
+    }
+    const timeout = window.setTimeout(() => {
+      pendingGatewayRequests.delete(id);
+      reject(new Error('MATLAB 网关代理请求超时'));
+    }, 360000);
+    pendingGatewayRequests.set(id, { resolve, reject, timeout });
+    const sent = sendMatlabEvent('GatewayRequest', {
+      id,
+      path,
+      method: String(options.method || 'GET').toUpperCase(),
+      body,
+    });
+    if (!sent) {
+      window.clearTimeout(timeout);
+      pendingGatewayRequests.delete(id);
+      reject(new Error('MATLAB 通信桥尚未就绪'));
+    }
+  });
+}
+
+function handleMatlabGatewayResponse(event) {
+  const data = event?.Data || event?.detail || event || {};
+  const pending = pendingGatewayRequests.get(String(data.id || ''));
+  if (!pending) return;
+  window.clearTimeout(pending.timeout);
+  pendingGatewayRequests.delete(String(data.id));
+  if (data.ok) pending.resolve(data.payload ?? {});
+  else pending.reject(new Error(String(data.error || '本地网关请求失败')));
+}
+
 async function api(path, options = {}) {
+  if (state.embedded && window.pidMatlabComponent) return apiViaMatlab(path, options);
   const response = await fetch(apiUrl(path), options);
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
+}
+function apiErrorText(error, action) {
+  const message = String(error?.message || error || '未知错误');
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return `${action}失败：无法连接本地 PID 网关，请重新打开 PID Agent 后再试`;
+  }
+  return `${action}失败：${message}`;
 }
 
 function jsonPost(body) {
@@ -201,8 +391,12 @@ async function refreshHealth() {
   try {
     const payload = await api('/api/health');
     el('connectionState').textContent = payload.matlabAvailable ? 'MATLAB 已连接' : '网关已连接，未找到 MATLAB';
-  } catch (_) {
+    sendMatlabEvent('GatewayStatus', { ok: true, matlabAvailable: Boolean(payload.matlabAvailable) });
+    return true;
+  } catch (error) {
     el('connectionState').textContent = '本地网关未连接';
+    sendMatlabEvent('GatewayStatus', { ok: false, error: String(error?.message || error) });
+    return false;
   }
 }
 
@@ -213,7 +407,8 @@ async function chooseLatestJob() {
 }
 
 async function refreshJob() {
-  await refreshHealth();
+  const gatewayReady = await refreshHealth();
+  if (!gatewayReady) return;
   await chooseLatestJob();
   if (!state.activeJobId) return;
   try {
@@ -440,7 +635,7 @@ async function discoverAgents() {
     if (current && current.installed) el('modalAgentExecutable').value = current.executable;
     updateAgentFields();
   } catch (error) {
-    status.textContent = '发现失败：' + error.message;
+    status.textContent = apiErrorText(error, '发现 Code Agent');
     status.classList.add('error');
   }
 }
@@ -459,7 +654,7 @@ async function testSelectedAgent() {
     status.textContent = payload.versionOutput || 'CLI 可用';
     status.classList.add('ok');
   } catch (error) {
-    status.textContent = '测试失败：' + error.message;
+    status.textContent = apiErrorText(error, '测试 CLI');
     status.classList.add('error');
   } finally {
     button.disabled = false;
@@ -761,8 +956,12 @@ function init() {
   el('agentDiscoverButton').addEventListener('click', discoverAgents);
   el('agentTestButton').addEventListener('click', testSelectedAgent);
 
-  renderHistory([]); renderRecent([]); renderPidRows('currentPidRows', null); renderPidRows('bestPidRows', null);
-  el('currentMetrics').innerHTML = metricRows({}); el('bestMetrics').innerHTML = metricRows({});
+  renderHistory([]);
+  renderRecent([]);
+  renderPidRows('currentPidRows', null);
+  renderPidRows('bestPidRows', null);
+  renderEffectEvaluation({});
+  el('bestMetrics').innerHTML = metricRows({});
   restoreAiConfigFromStorage();
   updateAiSummary();
   refreshJob();
@@ -770,5 +969,6 @@ function init() {
 }
 
 window.applyPidMatlabContext = applyEmbeddedContext;
+window.handlePidGatewayResponse = handleMatlabGatewayResponse;
 window.navigatePidAgentView = activateView;
 window.addEventListener('DOMContentLoaded', init);

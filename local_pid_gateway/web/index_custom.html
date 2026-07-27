@@ -111,16 +111,33 @@
           <section class="metric-tile"><span>通过次数</span><strong id="passedText">0</strong></section>
         </div>
 
-        <div class="content-grid">
+        <div class="content-grid effect-overview-grid">
           <section class="panel">
             <div class="panel-title"><h3>当前参数</h3><span id="currentSummary">暂无</span></div>
             <div class="pid-table-wrap"><table class="pid-table"><thead><tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr></thead><tbody id="currentPidRows"></tbody></table></div>
           </section>
-          <section class="panel">
-            <div class="panel-title"><h3>当前效果</h3><span id="currentPass">暂无</span></div>
-            <div class="metrics-list" id="currentMetrics"></div>
+          <section class="panel effect-summary-panel">
+            <div class="panel-title"><h3>调参判定</h3><span id="currentPass">尚未评估</span></div>
+            <div class="effect-verdict" id="effectVerdict">
+              <div class="verdict-grade" id="effectGrade">--</div>
+              <div class="verdict-copy">
+                <strong id="effectVerdictTitle">等待仿真结果</strong>
+                <span id="effectVerdictDetail">完成基线和候选仿真后给出结论</span>
+              </div>
+            </div>
+            <div class="gate-list" id="effectGateList"><span class="gate-chip neutral">尚无硬指标结果</span></div>
           </section>
         </div>
+
+        <section class="panel full-width effect-comparison-panel">
+          <div class="panel-title"><h3>效果对比</h3><span id="effectComparisonSummary">原始 PID 与候选结果</span></div>
+          <div class="table-scroll effect-table-scroll">
+            <table class="effect-table">
+              <thead><tr><th>指标</th><th>原始基线</th><th>当前候选</th><th>当前最佳</th><th>目标上限</th><th>当前判定</th></tr></thead>
+              <tbody id="effectComparisonRows"><tr><td colspan="6">等待仿真结果</td></tr></tbody>
+            </table>
+          </div>
+        </section>
 
         <section class="panel full-width">
           <div class="panel-title"><h3>最近候选</h3><span>自动保留最近 10 条</span></div>
@@ -255,6 +272,11 @@
         const data = event.Data || event.detail || event || {};
         const view = data.view || htmlComponent.Data?.initialView || 'run';
         if (typeof window.navigatePidAgentView === 'function') window.navigatePidAgentView(view);
+      });
+      htmlComponent.addEventListener('PidAgentGatewayResponse', (event) => {
+        if (typeof window.handlePidGatewayResponse === 'function') {
+          window.handlePidGatewayResponse(event);
+        }
       });
       deliverContext();
     }

@@ -61,12 +61,31 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             self.assertEqual([job["jobId"] for job in jobs], ["complete"])
 
     def test_toolstrip_commands_and_uihtml_bridge_are_packaged(self):
-        tab = json.loads((ROOT / "resources" / "json" / "pidAgentTab.json").read_text(encoding="utf-8"))
-        commands = {
-            entry.get("command")
-            for entry in tab["entries"]
-            if entry.get("type") == "Action"
-        }
+        json_root = ROOT / "resources" / "json"
+        tab = json.loads((json_root / "pidAgentTab.json").read_text(encoding="utf-8"))
+        actions = json.loads((json_root / "pidAgentTab_actions.json").read_text(encoding="utf-8"))
+        action_entries = [entry for entry in actions["entries"] if entry.get("type") == "Action"]
+        action_ids = {entry["id"] for entry in action_entries}
+        icon_entries = [entry for entry in actions["entries"] if entry.get("type") == "Icon"]
+        icon_ids = {entry["id"] for entry in icon_entries}
+        commands = {entry["command"] for entry in action_entries}
+
+        def collect_action_refs(node):
+            refs = {node["action"]} if isinstance(node, dict) and "action" in node else set()
+            if isinstance(node, dict):
+                for child in node.get("children", []):
+                    refs.update(collect_action_refs(child))
+            return refs
+
+        action_refs = set()
+        for entry in tab["entries"]:
+            action_refs.update(collect_action_refs(entry))
+
+        self.assertEqual(action_refs, action_ids)
+        self.assertEqual({entry["icon"] for entry in action_entries}, icon_ids)
+        for icon in icon_entries:
+            self.assertTrue((ROOT / "resources" / "icons" / icon["icon16"]).is_file())
+            self.assertTrue((ROOT / "resources" / "icons" / icon["icon24"]).is_file())
         self.assertIn("pid_agent_ui.launch('current')", commands)
         self.assertIn("pid_agent_ui.launch('selected')", commands)
         self.assertIn("pid_agent_ui.openManager()", commands)
@@ -77,6 +96,14 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("sendEventToMATLAB('BridgeReady'", html)
         self.assertIn('src="./app_custom.js"', html)
         self.assertIn('href="./styles_custom.css"', html)
+        self.assertIn('id="effectVerdict"', html)
+        self.assertIn('id="effectComparisonRows"', html)
+
+        app_js = (ROOT / "local_pid_gateway" / "web" / "app_custom.js").read_text(encoding="utf-8")
+        self.assertIn("renderEffectEvaluation({})", app_js)
+        self.assertIn("apiViaMatlab(path, options)", app_js)
+        self.assertIn("sendMatlabEvent('GatewayRequest'", app_js)
+        self.assertNotIn("el('currentMetrics')", app_js)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ cfg.maxIterations = 20;
 cfg.numCandidates = 16;
 cfg.stopOnFirstPass = true;
 cfg.useParallel = false;
+cfg.evaluateBaseline = true;
 
 cfg.initialPid = [];
 cfg.initialPids = [];

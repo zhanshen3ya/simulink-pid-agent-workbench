@@ -6,6 +6,8 @@ classdef PidAgentWebApp < handle
         HTML
         ModelContext = struct()
         BridgeReady = false
+        GatewayReady = false
+        GatewayError = ""
     end
 
     methods
@@ -70,6 +72,16 @@ classdef PidAgentWebApp < handle
             switch eventName
                 case "BridgeReady"
                     app.BridgeReady = true;
+                case "GatewayStatus"
+                    data = event.HTMLEventData;
+                    app.GatewayReady = isstruct(data) && isfield(data, "ok") && logical(data.ok);
+                    if isstruct(data) && isfield(data, "error")
+                        app.GatewayError = string(data.error);
+                    else
+                        app.GatewayError = "";
+                    end
+                case "GatewayRequest"
+                    app.forwardGatewayRequest(event.HTMLEventData);
                 case "SyncCurrentModel"
                     [context, confirmed] = pid_agent_ui.prepareCurrentContext();
                     if confirmed
@@ -83,6 +95,54 @@ classdef PidAgentWebApp < handle
                 case "OpenManager"
                     pid_agent_ui.openManager();
             end
+        end
+
+        function forwardGatewayRequest(app, data)
+            response = struct("id", "", "ok", false, ...
+                "payload", struct(), "error", "Invalid gateway request.");
+            if ~isstruct(data) || ~isfield(data, "id") || ~isfield(data, "path")
+                sendEventToHTMLSource(app.HTML, ...
+                    "PidAgentGatewayResponse", response);
+                return;
+            end
+
+            response.id = string(data.id);
+            requestPath = string(data.path);
+            if ~startsWith(requestPath, "/api/") || contains(requestPath, "..")
+                response.error = "Only local /api/ requests are allowed.";
+                sendEventToHTMLSource(app.HTML, ...
+                    "PidAgentGatewayResponse", response);
+                return;
+            end
+
+            method = "GET";
+            if isfield(data, "method")
+                method = upper(string(data.method));
+            end
+            url = "http://127.0.0.1:8788" + requestPath;
+            options = weboptions("ContentType", "json", ...
+                "MediaType", "application/json", "Timeout", 360);
+            try
+                if method == "GET"
+                    payload = webread(url, options);
+                elseif method == "POST"
+                    body = struct();
+                    if isfield(data, "body") && ~isempty(data.body)
+                        body = data.body;
+                    end
+                    payload = webwrite(url, body, options);
+                else
+                    error("PIDAgent:UnsupportedGatewayMethod", ...
+                        "Unsupported gateway method: %s", method);
+                end
+                response.ok = true;
+                response.payload = payload;
+                response.error = "";
+            catch exception
+                response.error = string(exception.message);
+            end
+            sendEventToHTMLSource(app.HTML, ...
+                "PidAgentGatewayResponse", response);
         end
 
         function locatePid(~, blockPath)

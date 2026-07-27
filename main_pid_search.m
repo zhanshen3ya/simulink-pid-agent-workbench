@@ -32,6 +32,27 @@ state.elapsedSeconds = 0;
 state.testedCount = 0;
 state.passedCount = 0;
 state.failedCount = 0;
+state.baseline = [];
+
+if ~isfield(cfg, "evaluateBaseline") || cfg.evaluateBaseline
+    baselineCandidate = cfg.initialCandidate;
+    baselineCandidate.source = "baseline";
+    baselineResult = pid_tuning_core.runCandidateBatch(baselineCandidate, cfg);
+    baselineMetrics = pid_tuning_core.evaluatePidRun(...
+        baselineResult(1), baselineCandidate, cfg);
+    baselineValidation = pid_tuning_core.validatePidMetrics(baselineMetrics, cfg);
+    baselineRecord = struct();
+    baselineRecord.iteration = 0;
+    baselineRecord.candidateIndex = 0;
+    baselineRecord.globalIndex = 0;
+    baselineRecord.candidate = baselineCandidate;
+    baselineRecord.metrics = baselineMetrics;
+    baselineRecord.validation = baselineValidation;
+    baselineRecord.score = baselineValidation.score;
+    baselineRecord.passed = baselineValidation.passed;
+    state.baseline = baselineRecord;
+    state.elapsedSeconds = toc(runTimer);
+end
 
 pid_tuning_core.writeCurrentStatus("running", state, [], [], cfg);
 
