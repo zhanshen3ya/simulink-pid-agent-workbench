@@ -1,0 +1,48 @@
+project:
+  name: p0-second-order-matlab
+  random_seed: 42
+
+model:
+  file: pid_ai_second_order_demo.slx
+  stop_time: 10.0
+  backup_original: true
+  write_result_to_copy: true
+
+controller:
+  mode: auto
+  type: standard_pid
+
+signals:
+  mode: manual
+  reference: r
+  measurement: y
+  raw_control: u
+
+discovery:
+  enable_dynamic_probe: false
+  auto_accept_confidence: 0.85
+  minimum_confidence: 0.60
+
+evaluation:
+  profile: generic_step
+  settling_band: 0.02
+  tail_window_ratio: 0.10
+  use_normalized_metrics: true
+  remove_switching_ripple: false
+  moving_average_window: 1
+
+constraints:
+  output_min: -2.0
+  output_max: 2.0
+  control_min: -100.0
+  control_max: 100.0
+  max_saturation_ratio:
+  max_overshoot: 0.50
+  max_settling_time: 9.0
+  max_steady_state_error: 0.10
+  require_error_reduction: true
+
+deployment:
+  apply_best: false
+  overwrite_original: false
+  require_validation_pass: true

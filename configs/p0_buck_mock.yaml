@@ -1,0 +1,60 @@
+project:
+  name: p0-buck-acceptance
+  random_seed: 42
+
+model:
+  file: mock:buck
+  stop_time: 1.0
+  backup_original: true
+  write_result_to_copy: true
+
+controller:
+  mode: auto
+  type: standard_pid
+
+signals:
+  mode: auto
+
+discovery:
+  enable_dynamic_probe: false
+  auto_accept_confidence: 0.85
+  minimum_confidence: 0.60
+
+evaluation:
+  profile: voltage_regulation
+  settling_band: 0.02
+  tail_window_ratio: 0.10
+  use_normalized_metrics: true
+  remove_switching_ripple: true
+  moving_average_window: 11
+
+constraints:
+  output_min: -1.0
+  output_max: 12.0
+  control_min: 0.0
+  control_max: 1.0
+  max_saturation_ratio: 0.20
+  max_overshoot: 0.10
+  max_settling_time: 0.8
+  max_steady_state_error: 0.03
+  max_current: 5.0
+  require_error_reduction: true
+
+optimization:
+  pipeline:
+    - initial_design
+    - differential_evolution
+  max_trials: 120
+  parallel_workers: 1
+  resume: true
+  cache: true
+
+robustness:
+  enabled: false
+  worst_case_weight: 0.5
+  validation_holdout: true
+
+deployment:
+  apply_best: false
+  overwrite_original: false
+  require_validation_pass: true

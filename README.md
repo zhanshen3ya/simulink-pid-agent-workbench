@@ -13,6 +13,25 @@
 
 支持单 PID、内外环双 PID，以及一个模型中的多组 PID 顺序调参。AI 仅用于生成参数，所有参数都需要经过 Simulink 仿真。
 
+## P0 基础扫描与验证
+
+当前仓库新增了 P0 基础层，用于在开始自动调参前回答两个问题：
+
+1. 这个 PID 实际闭合的是哪一个负反馈回路？
+2. 一组候选参数是否在固定指标和硬约束下可用？
+
+P0 提供严格 YAML 配置、标准 PID 只读扫描、Block/Port/Signal 图、参考/误差/反馈/控制信号映射、级联内外环顺序、归一化指标、稳定性分类和硬约束门禁。静态扫描没有动态探测时只建议人工确认，不自动认定信号映射正确；任何门禁失败的候选都不计算综合分数。
+
+无需 MATLAB 的验收命令：
+
+```powershell
+python -m autopid.cli scan --config configs\p0_buck_mock.yaml --runner mock
+python -m autopid.cli validate --config configs\p0_buck_mock.yaml --runner mock
+```
+
+连接 MATLAB 后，将 `model.file` 改为 `.slx` 或 `.mdl` 路径，并将 runner 改为 `matlab`。MATLAB 基线验证还需要在 `signals` 中填写模型已记录的参考、测量和控制信号名称。
+
+P0 不实现自动优化、LLM 接入或参数写回。原始模型不会被覆盖。详细说明见 [P0 架构](docs/p0_architecture.md)、[当前状态审计](docs/current_state.md) 和 [调研记录](docs/research_notes.md)。
 ## 运行环境
 
 已测试环境：

@@ -9,6 +9,7 @@
 !*.html
 !*.css
 !*.md
+!*.txt
 !*.bat
 !*.ps1
 !*.json
