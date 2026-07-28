@@ -8,6 +8,7 @@ const state = {
   embedded: false,
   apiBaseUrl: '',
   simulinkContext: null,
+  signalMappingModelKey: '',
 };
 
 const el = (id) => document.getElementById(id);
@@ -497,6 +498,7 @@ async function discoverModel() {
 
 function renderModelInfo() {
   const blocks = state.modelInfo?.pidBlocks || [];
+  el('signalMappingConfirmedInput').checked = false;
   el('modelConfigBody').classList.remove('hidden');
   el('discoveredPidRows').innerHTML = blocks.length ? blocks.map((block, index) => {
     const selected = state.selectedPidIndexes.includes(index);
@@ -509,10 +511,122 @@ function renderModelInfo() {
   }).join('') : '<tr><td colspan="8">未发现带 P/I/D 参数的 PID Controller 块</td></tr>';
   document.querySelectorAll('.pid-select').forEach((checkbox) => checkbox.addEventListener('change', togglePidSelection));
   document.querySelectorAll('.pid-locate-button').forEach((button) => button.addEventListener('click', locatePidFromTable));
-  el('loggedSignalsList').innerHTML = (state.modelInfo.loggedSignals || []).map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
   renderPidEditors();
+  renderSignalMapping();
 }
 
+function loggedSignalNames() {
+  return stringArray(state.modelInfo?.loggedSignals).filter((name) => name.trim());
+}
+
+function signalOptions(selectedValue = '', optional = false) {
+  const signals = loggedSignalNames();
+  const placeholder = optional ? '不检查' : '请选择已记录信号';
+  const options = [`<option value="">${placeholder}</option>`];
+  signals.forEach((name) => {
+    const selected = name === selectedValue ? ' selected' : '';
+    options.push(`<option value="${escapeHtml(name)}"${selected}>${escapeHtml(name)}</option>`);
+  });
+  return options.join('');
+}
+
+function evaluationPidIndex() {
+  const index = Number(el('evaluationPidSelect')?.value);
+  return Number.isInteger(index) && state.selectedPidIndexes.includes(index) ? index : null;
+}
+
+function preferredSignal(previous) {
+  return loggedSignalNames().includes(previous) ? previous : '';
+}
+
+function renderSignalMapping() {
+  const evaluationSelect = el('evaluationPidSelect');
+  if (!evaluationSelect) return;
+  const previousPid = evaluationPidIndex();
+  const modelKey = String(state.modelInfo?.modelPath || state.modelInfo?.modelName || '');
+  const sameModel = state.signalMappingModelKey === modelKey;
+  const previous = {
+    reference: sameModel ? el('referenceSignalInput').value : '',
+    output: sameModel ? el('outputSignalInput').value : '',
+    control: sameModel ? el('controlSignalInput').value : '',
+    current: sameModel ? el('currentSignalInput').value : '',
+  };
+  state.signalMappingModelKey = modelKey;
+  evaluationSelect.innerHTML = state.selectedPidIndexes.map((index, position) => {
+    const block = state.modelInfo?.pidBlocks?.[index] || {};
+    return `<option value="${index}">PID ${position + 1} · ${escapeHtml(block.name || block.path || index)}</option>`;
+  }).join('');
+  if (previousPid !== null && state.selectedPidIndexes.includes(previousPid)) {
+    evaluationSelect.value = String(previousPid);
+  }
+
+  const resolved = {
+    reference: preferredSignal(previous.reference),
+    output: preferredSignal(previous.output),
+    control: preferredSignal(previous.control),
+    current: preferredSignal(previous.current),
+  };
+  el('referenceSignalInput').innerHTML = signalOptions(resolved.reference);
+  el('outputSignalInput').innerHTML = signalOptions(resolved.output);
+  el('controlSignalInput').innerHTML = signalOptions(resolved.control);
+  el('currentSignalInput').innerHTML = signalOptions(resolved.current, true);
+  renderSignalMappingPreview();
+}
+
+function setSuggestedSignal(id, name) {
+  const normalized = String(name || '').trim();
+  if (!normalized || !loggedSignalNames().includes(normalized)) return false;
+  el(id).value = normalized;
+  return true;
+}
+
+function applySignalSuggestion() {
+  const index = evaluationPidIndex();
+  const block = index === null ? null : state.modelInfo?.pidBlocks?.[index];
+  const suggestion = block?.signalSuggestion || {};
+  const applied = [
+    setSuggestedSignal('referenceSignalInput', suggestion.referenceSignalName),
+    setSuggestedSignal('outputSignalInput', suggestion.outputSignalName),
+    setSuggestedSignal('controlSignalInput', suggestion.controlSignalName),
+  ];
+  setSuggestedSignal('currentSignalInput', suggestion.currentSignalName);
+  el('signalMappingConfirmedInput').checked = false;
+  renderSignalMappingPreview();
+  if (!applied.every(Boolean)) {
+    setScanState('拓扑建议不完整或包含未记录信号，请人工选择并确认', true);
+  } else {
+    setScanState('已应用拓扑建议，请核对后确认');
+  }
+}
+
+function markSignalMappingChanged() {
+  el('signalMappingConfirmedInput').checked = false;
+  renderSignalMappingPreview();
+}
+
+function renderSignalMappingPreview() {
+  const signals = new Set(loggedSignalNames());
+  const roles = [
+    ['有效参考值', el('referenceSignalInput').value, true],
+    ['反馈 / 输出', el('outputSignalInput').value, true],
+    ['控制输出', el('controlSignalInput').value, true],
+    ['电流保护', el('currentSignalInput').value, false],
+  ];
+  const cards = roles.map(([label, name, required]) => {
+    const valid = name ? signals.has(name) : !required;
+    const detail = name || (required ? '尚未选择' : '未启用');
+    return `<div class="signal-role"><span>${label}</span><strong class="${valid ? 'signal-ok' : 'signal-bad'}">${escapeHtml(detail)}</strong></div>`;
+  }).join('');
+  const index = evaluationPidIndex();
+  const suggestion = index === null ? null : state.modelInfo?.pidBlocks?.[index]?.signalSuggestion;
+  const confidence = Number(suggestion?.confidence);
+  const noteParts = [];
+  if (Number.isFinite(confidence)) noteParts.push(`拓扑建议置信度 ${Math.round(confidence * 100)}%`);
+  const notes = stringArray(suggestion?.notes);
+  if (notes.length) noteParts.push(notes.join('；'));
+  if (!loggedSignalNames().length) noteParts.push('模型中没有已记录的命名信号，请先在 Simulink 中启用信号记录');
+  el('signalMappingPreview').innerHTML = `${cards}<div class="signal-mapping-note">${escapeHtml(noteParts.join(' · ') || '请选择信号并确认映射')}</div>`;
+}
 function sendMatlabEvent(name, data) {
   const component = window.pidMatlabComponent;
   if (!component || typeof component.sendEventToMATLAB !== 'function') return false;
@@ -905,15 +1019,37 @@ function collectCustomConfig() {
   const maxIterations = numberFrom('maxIterationsInput', { label: '迭代轮数', integer: true, min: 1 });
   const numCandidates = numberFrom('numCandidatesInput', { label: '每轮候选数', integer: true, min: 1 });
   const stopTime = numberFrom('stopTimeInput', { label: '仿真停止时间', min: Number.MIN_VALUE });
+  const availableSignalNames = loggedSignalNames();
+  const referenceSignalName = requiredText('referenceSignalInput', '有效参考值');
+  const outputSignalName = requiredText('outputSignalInput', '反馈 / 被控输出');
+  const controlSignalName = requiredText('controlSignalInput', 'PID 控制输出');
+  const currentSignalName = String(el('currentSignalInput').value || '').trim();
+  const selectedSignals = [referenceSignalName, outputSignalName, controlSignalName, currentSignalName].filter(Boolean);
+  const missingSignals = selectedSignals.filter((name) => !availableSignalNames.includes(name));
+  if (missingSignals.length) throw new Error(`以下信号尚未启用记录：${missingSignals.join('、')}`);
+  if (referenceSignalName === outputSignalName) {
+    validationError('outputSignalInput', '有效参考值和反馈输出不能选择同一信号');
+  }
+  if (!el('signalMappingConfirmedInput').checked) {
+    validationError('signalMappingConfirmedInput', '请核对并确认效果评估信号映射');
+  }
+  const evaluationIndex = evaluationPidIndex();
+  if (evaluationIndex === null || !blocks[evaluationIndex]?.path) {
+    validationError('evaluationPidSelect', '请选择用于效果评价的主 PID');
+  }
   return {
     modelPath,
     pidBlocks,
     workingDirectory: state.simulinkContext?.workingDirectory || '',
     projectRoot: state.simulinkContext?.projectRoot || '',
     projectPath: state.simulinkContext?.projectPath || '',
-    referenceSignalName: requiredText('referenceSignalInput', '参考信号名'),
-    outputSignalName: requiredText('outputSignalInput', '输出信号名'),
-    controlSignalName: requiredText('controlSignalInput', '控制信号名'),
+    referenceSignalName,
+    outputSignalName,
+    controlSignalName,
+    currentSignalName,
+    availableSignalNames,
+    signalMappingConfirmed: true,
+    evaluationPidPath: blocks[evaluationIndex].path,
     stopTime: String(stopTime),
     maxIterations,
     numCandidates,
@@ -1009,6 +1145,10 @@ function init() {
   el('discoverModelButton').addEventListener('click', discoverModel);
   el('syncSimulinkButton').addEventListener('click', () => sendMatlabEvent('SyncCurrentModel', {}));
   el('startCustomButton').addEventListener('click', startCustom);
+  el('applySignalSuggestionButton').addEventListener('click', applySignalSuggestion);
+  ['evaluationPidSelect', 'referenceSignalInput', 'outputSignalInput', 'controlSignalInput', 'currentSignalInput']
+    .forEach((id) => el(id).addEventListener('change', markSignalMappingChanged));
+  el('signalMappingConfirmedInput').addEventListener('change', renderSignalMappingPreview);
   el('modelPathInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') discoverModel(); });
 
   /* -- AI modal bindings -- */

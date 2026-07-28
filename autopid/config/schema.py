@@ -288,7 +288,8 @@ def _translate_legacy(source: Dict[str, Any]) -> Dict[str, Any]:
         "modelPath", "stopTime", "pidBlocks", "referenceSignalName", "outputSignalName",
         "controlSignalName", "currentSignalName", "randomSeed", "maxIterations",
         "numCandidates", "stopOnFirstPass", "useParallel", "targets", "controlUpperLimit",
-        "runId", "workingDirectory", "projectRoot", "projectPath", "ai"
+        "runId", "workingDirectory", "projectRoot", "projectPath", "ai",
+        "availableSignalNames", "signalMappingConfirmed", "evaluationPidPath"
     }
     unknown = sorted(set(source) - legacy_allowed - nested_names)
     if unknown:

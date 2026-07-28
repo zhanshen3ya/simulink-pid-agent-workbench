@@ -316,6 +316,56 @@ def normalize_custom_payload(payload):
             "控制量上限必须是正有限数字。", "CONTROL_LIMIT_INVALID", "controlUpperLimit"
         )
 
+    signal_values = {}
+    for field, label in (
+        ("referenceSignalName", "有效参考值"),
+        ("outputSignalName", "反馈 / 被控输出"),
+        ("controlSignalName", "PID 控制输出"),
+    ):
+        name = str(payload.get(field) or "").strip()
+        if not name:
+            raise RequestValidationError(
+                f"{label}不能为空。", "SIGNAL_REQUIRED", field
+            )
+        signal_values[field] = name
+    signal_values["currentSignalName"] = str(
+        payload.get("currentSignalName") or ""
+    ).strip()
+    if signal_values["referenceSignalName"] == signal_values["outputSignalName"]:
+        raise RequestValidationError(
+            "有效参考值和反馈输出不能是同一信号。",
+            "SIGNAL_MAPPING_INVALID", "outputSignalName"
+        )
+
+    raw_available = payload.get("availableSignalNames")
+    if raw_available is None:
+        available_signal_names = []
+    elif not isinstance(raw_available, list):
+        raise RequestValidationError(
+            "availableSignalNames 必须是数组。",
+            "SIGNAL_LIST_INVALID", "availableSignalNames"
+        )
+    else:
+        available_signal_names = list(dict.fromkeys(
+            str(item).strip() for item in raw_available if str(item).strip()
+        ))
+    if available_signal_names:
+        for field, name in signal_values.items():
+            if name and name not in available_signal_names:
+                raise RequestValidationError(
+                    f"信号 {name} 尚未启用记录或不属于当前模型。",
+                    "SIGNAL_NOT_LOGGED", field
+                )
+
+    evaluation_pid_path = str(payload.get("evaluationPidPath") or "").strip()
+    selected_paths = {item["path"] for item in blocks}
+    if evaluation_pid_path and evaluation_pid_path not in selected_paths:
+        raise RequestValidationError(
+            "主评价 PID 必须属于当前选中的 PID。",
+            "EVALUATION_PID_INVALID", "evaluationPidPath"
+        )
+    if not evaluation_pid_path:
+        evaluation_pid_path = blocks[0]["path"]
     return {
         "modelPath": model_path,
         "workingDirectory": normalize_optional_directory(payload.get("workingDirectory")),
@@ -323,10 +373,13 @@ def normalize_custom_payload(payload):
         "projectPath": normalize_project_path(payload.get("projectPath")),
         "pidBlocks": blocks,
         "stopTime": stop_time_text,
-        "referenceSignalName": str(payload.get("referenceSignalName") or "r"),
-        "outputSignalName": str(payload.get("outputSignalName") or "y"),
-        "controlSignalName": str(payload.get("controlSignalName") or "u"),
-        "currentSignalName": str(payload.get("currentSignalName") or ""),
+        "referenceSignalName": signal_values["referenceSignalName"],
+        "outputSignalName": signal_values["outputSignalName"],
+        "controlSignalName": signal_values["controlSignalName"],
+        "currentSignalName": signal_values["currentSignalName"],
+        "availableSignalNames": available_signal_names,
+        "signalMappingConfirmed": bool(payload.get("signalMappingConfirmed", False)),
+        "evaluationPidPath": evaluation_pid_path,
         "controlUpperLimit": control_upper_limit,
         "maxIterations": max_iterations,
         "numCandidates": num_candidates,

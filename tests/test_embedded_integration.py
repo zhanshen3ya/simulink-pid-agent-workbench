@@ -36,6 +36,9 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                         "Kd": [0, 1], "N": [1, 1000],
                     },
                 }],
+                "referenceSignalName": "Vref",
+                "outputSignalName": "Vout",
+                "controlSignalName": "duty",
             }
 
             normalized = server_custom.normalize_custom_payload(payload)
@@ -57,12 +60,70 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                     "path": "controller/PID",
                     "bounds": {"Kp": [0, 1], "Ki": [0, 1], "Kd": [0, 0], "N": [100, 100]},
                 }],
+                "referenceSignalName": "r",
+                "outputSignalName": "y",
+                "controlSignalName": "u",
             }
 
             normalized = server_custom.normalize_custom_payload(payload)
 
             self.assertEqual(normalized["projectPath"], "")
 
+    def test_manual_signal_mapping_rejects_unlogged_signal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = {
+                "modelPath": str(model),
+                "pidBlocks": [{
+                    "path": "controller/PID",
+                    "bounds": {
+                        "Kp": [0, 1], "Ki": [0, 1],
+                        "Kd": [0, 0], "N": [100, 100],
+                    },
+                }],
+                "referenceSignalName": "Vref",
+                "outputSignalName": "wrong_voltage",
+                "controlSignalName": "duty",
+                "availableSignalNames": ["Vref", "Vout", "duty"],
+                "signalMappingConfirmed": True,
+                "evaluationPidPath": "controller/PID",
+            }
+
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+
+            self.assertEqual(raised.exception.code, "SIGNAL_NOT_LOGGED")
+            self.assertEqual(raised.exception.field, "outputSignalName")
+
+    def test_manual_signal_mapping_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = {
+                "modelPath": str(model),
+                "pidBlocks": [{
+                    "path": "controller/PID",
+                    "bounds": {
+                        "Kp": [0, 1], "Ki": [0, 1],
+                        "Kd": [0, 0], "N": [100, 100],
+                    },
+                }],
+                "referenceSignalName": "Vref",
+                "outputSignalName": "Vout",
+                "controlSignalName": "duty",
+                "currentSignalName": "iL",
+                "availableSignalNames": ["Vref", "Vout", "duty", "iL"],
+                "signalMappingConfirmed": True,
+                "evaluationPidPath": "controller/PID",
+            }
+
+            normalized = server_custom.normalize_custom_payload(payload)
+
+            self.assertEqual(normalized["referenceSignalName"], "Vref")
+            self.assertEqual(normalized["currentSignalName"], "iL")
+            self.assertTrue(normalized["signalMappingConfirmed"])
+            self.assertEqual(normalized["evaluationPidPath"], "controller/PID")
     def test_custom_endpoint_returns_structured_redacted_error(self):
         with tempfile.TemporaryDirectory() as directory:
             original_log = server_custom.REQUEST_LOG
@@ -156,12 +217,16 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn('href="./styles_custom.css"', html)
         self.assertIn('id="effectVerdict"', html)
         self.assertIn('id="effectComparisonRows"', html)
+        self.assertIn('id="evaluationPidSelect"', html)
+        self.assertIn('id="signalMappingConfirmedInput"', html)
 
         app_js = (ROOT / "local_pid_gateway" / "web" / "app_custom.js").read_text(encoding="utf-8")
         self.assertIn("renderEffectEvaluation({})", app_js)
         self.assertIn("apiViaMatlab(path, options)", app_js)
         self.assertIn("sendMatlabEvent('GatewayRequest'", app_js)
         self.assertIn("function validationError", app_js)
+        self.assertIn("function applySignalSuggestion", app_js)
+        self.assertIn("availableSignalNames", app_js)
         self.assertIn("apiErrorText(error, '启动')", app_js)
         self.assertNotIn("el('currentMetrics')", app_js)
 

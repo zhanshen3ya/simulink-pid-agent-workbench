@@ -35,6 +35,19 @@ verifyTrue(testCase, all(isfield(result.controllers, ...
 verifyEqual(testCase, string(get_param(modelName, "Dirty")), dirtyBefore);
 end
 
+function testPidInspectionSuggestsLoggedSignals(testCase)
+modelPath = fullfile(testCase.TestData.Root, "pid_ai_second_order_demo.slx");
+info = pid_tuning_core.inspectPidModel(modelPath);
+
+verifyEqual(testCase, numel(info.pidBlocks), 1);
+suggestion = info.pidBlocks(1).signalSuggestion;
+verifyEqual(testCase, string(suggestion.referenceSignalName), "r");
+verifyEqual(testCase, string(suggestion.outputSignalName), "y");
+verifyEqual(testCase, string(suggestion.controlSignalName), "u");
+verifyTrue(testCase, suggestion.complete);
+verifyTrue(testCase, suggestion.allLogged);
+end
+
 function testCascadeContainsTwoControllers(testCase)
 modelPath = fullfile(testCase.TestData.Root, "pid_ai_cascade_two_pid_demo.slx");
 verifyTrue(testCase, isfile(modelPath));

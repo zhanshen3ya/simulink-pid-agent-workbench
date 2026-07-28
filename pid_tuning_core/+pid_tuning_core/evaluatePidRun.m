@@ -31,8 +31,9 @@ try
     if numel(tr) ~= numel(t) || any(abs(tr(:) - t(:)) > 1e-9)
         r = interp1(tr(:), r(:), t(:), "linear", "extrap");
     end
-catch
-    r = ones(size(y)) * y(end);
+catch err
+    metrics.error = "Reference signal extraction failed: " + string(err.message);
+    return;
 end
 
 try
@@ -40,8 +41,9 @@ try
     if numel(tu) ~= numel(t) || any(abs(tu(:) - t(:)) > 1e-9)
         u = interp1(tu(:), u(:), t(:), "linear", "extrap");
     end
-catch
-    u = [];
+catch err
+    metrics.error = "Control signal extraction failed: " + string(err.message);
+    return;
 end
 
 t = t(:);
