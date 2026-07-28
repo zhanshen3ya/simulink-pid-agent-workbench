@@ -43,9 +43,9 @@ projectPath = "";
 try
     project = currentProject;
     projectRoot = string(project.RootFolder);
-    if isprop(project, "ProjectPath")
-        projectPath = string(project.ProjectPath);
-    end
+    % openProject accepts the root folder. ProjectPath is the collection of
+    % folders placed on the MATLAB path, not the project definition file.
+    projectPath = projectRoot;
 catch
 end
 

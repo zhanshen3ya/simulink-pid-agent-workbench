@@ -99,7 +99,8 @@ classdef PidAgentWebApp < handle
 
         function forwardGatewayRequest(app, data)
             response = struct("id", "", "ok", false, ...
-                "payload", struct(), "error", "Invalid gateway request.");
+                "payload", struct(), "error", "Invalid gateway request.", ...
+                "statusCode", 0);
             if ~isstruct(data) || ~isfield(data, "id") || ~isfield(data, "path")
                 sendEventToHTMLSource(app.HTML, ...
                     "PidAgentGatewayResponse", response);
@@ -120,24 +121,22 @@ classdef PidAgentWebApp < handle
                 method = upper(string(data.method));
             end
             url = "http://127.0.0.1:8788" + requestPath;
-            options = weboptions("ContentType", "json", ...
-                "MediaType", "application/json", "Timeout", 360);
             try
-                if method == "GET"
-                    payload = webread(url, options);
-                elseif method == "POST"
-                    body = struct();
-                    if isfield(data, "body") && ~isempty(data.body)
-                        body = data.body;
-                    end
-                    payload = webwrite(url, body, options);
-                else
-                    error("PIDAgent:UnsupportedGatewayMethod", ...
-                        "Unsupported gateway method: %s", method);
+                body = struct();
+                if isfield(data, "body") && ~isempty(data.body)
+                    body = data.body;
                 end
-                response.ok = true;
+                [payload, statusCode, statusText] = ...
+                    pid_agent_ui.sendGatewayHttpRequest(method, url, body);
                 response.payload = payload;
-                response.error = "";
+                response.statusCode = statusCode;
+                if statusCode >= 200 && statusCode < 300
+                    response.ok = true;
+                    response.error = "";
+                else
+                    response.error = app.gatewayErrorMessage( ...
+                        payload, statusCode, statusText);
+                end
             catch exception
                 response.error = string(exception.message);
             end
@@ -145,6 +144,22 @@ classdef PidAgentWebApp < handle
                 "PidAgentGatewayResponse", response);
         end
 
+        function message = gatewayErrorMessage(~, payload, statusCode, statusText)
+            message = "";
+            if isstruct(payload)
+                if isfield(payload, "message") && strlength(string(payload.message)) > 0
+                    message = string(payload.message);
+                elseif isfield(payload, "error") && strlength(string(payload.error)) > 0
+                    message = string(payload.error);
+                end
+                if isfield(payload, "requestId") && strlength(string(payload.requestId)) > 0
+                    message = message + "（请求 " + string(payload.requestId) + "）";
+                end
+            end
+            if strlength(message) == 0
+                message = "HTTP " + statusCode + " " + statusText;
+            end
+        end
         function locatePid(~, blockPath)
             if strlength(blockPath) == 0
                 return;

@@ -32,6 +32,63 @@ def find_matlab_executable():
 
 MATLAB = find_matlab_executable()
 JOBS = {}
+REQUEST_LOG = ROOT / "local_pid_gateway" / "gateway_requests.jsonl"
+REQUEST_LOG_LOCK = threading.Lock()
+SENSITIVE_FIELDS = {"apikey", "api_key", "authorization", "password", "secret", "token"}
+
+
+class RequestValidationError(ValueError):
+    def __init__(self, message, code="INVALID_REQUEST", field=""):
+        super().__init__(message)
+        self.code = code
+        self.field = field
+
+
+def error_payload(error, request_id, default_code="INVALID_REQUEST"):
+    message = str(error)
+    result = {
+        "error": message,
+        "message": message,
+        "code": getattr(error, "code", default_code),
+        "requestId": request_id,
+    }
+    field = getattr(error, "field", "")
+    if field:
+        result["field"] = field
+    return result
+
+
+def redact_payload(value):
+    if isinstance(value, dict):
+        return {
+            key: ("***" if str(key).lower() in SENSITIVE_FIELDS else redact_payload(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    return value
+
+
+def log_request(request_id, method, path, status, payload=None, error=None):
+    record = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "requestId": request_id,
+        "method": method,
+        "path": path,
+        "status": int(status),
+    }
+    if payload is not None:
+        record["payload"] = redact_payload(payload)
+    if error is not None:
+        record["error"] = error_payload(error, request_id, "INTERNAL_ERROR" if status >= 500 else "INVALID_REQUEST")
+    try:
+        REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with REQUEST_LOG_LOCK:
+            with REQUEST_LOG.open("a", encoding="utf-8") as stream:
+                stream.write(line)
+    except OSError:
+        pass
 
 
 def read_json(path):
@@ -102,7 +159,9 @@ def matlab_quote(value):
 def normalize_model_path(value):
     text = str(value or "").strip().strip('"').strip("'").lstrip("\ufeff")
     if not text:
-        raise ValueError("请选择 Simulink 模型文件，或输入模型名。")
+        raise RequestValidationError(
+            "请选择 Simulink 模型文件，或输入模型名。", "MODEL_REQUIRED", "modelPath"
+        )
     if text.lower().startswith("file:///"):
         text = unquote(text[8:])
     expanded = os.path.expandvars(os.path.expanduser(text))
@@ -112,55 +171,85 @@ def normalize_model_path(value):
     if looks_like_path:
         if path.suffix.lower() not in allowed:
             suffix = path.suffix or "<无扩展名>"
-            raise ValueError(f"请选择 .slx 或 .mdl 模型，当前文件扩展名为 {suffix}: {expanded}")
+            raise RequestValidationError(
+                f"请选择 .slx 或 .mdl 模型，当前文件扩展名为 {suffix}: {expanded}",
+                "MODEL_TYPE_INVALID", "modelPath"
+            )
         if not path.is_file():
-            raise ValueError(f"模型文件不存在: {expanded}")
+            raise RequestValidationError(
+                f"模型文件不存在: {expanded}", "MODEL_NOT_FOUND", "modelPath"
+            )
         return str(path.resolve())
     return expanded
 
 
-def normalize_optional_path(value, label, expect_directory=False):
+def normalize_optional_directory(value):
     text = str(value or "").strip().strip('"').strip("'")
     if not text:
         return ""
     path = Path(os.path.expandvars(os.path.expanduser(text)))
-    if expect_directory and not path.is_dir():
-        raise ValueError(f"{label}目录不存在: {text}")
-    if not expect_directory and not path.is_file():
-        raise ValueError(f"{label}文件不存在: {text}")
-    return str(path.resolve())
+    return str(path.resolve()) if path.is_dir() else ""
+
+
+def normalize_project_path(value):
+    if isinstance(value, (list, tuple)):
+        return ""
+    text = str(value or "").strip().strip('"').strip("'")
+    if not text:
+        return ""
+    path = Path(os.path.expandvars(os.path.expanduser(text)))
+    return str(path.resolve()) if path.exists() else ""
+
 
 def validate_bounds(bounds, pid_index):
     result = {}
     for field in ("Kp", "Ki", "Kd", "N"):
+        input_field = f"pidBlocks[{pid_index - 1}].bounds.{field}"
         pair = (bounds or {}).get(field)
         if not isinstance(pair, list) or len(pair) != 2:
-            raise ValueError(f"PID {pid_index} 的 {field} 边界必须包含最小值和最大值。")
+            raise RequestValidationError(
+                f"PID {pid_index} 的 {field} 边界必须包含最小值和最大值。",
+                "PID_BOUNDS_INVALID", input_field
+            )
         try:
             low, high = float(pair[0]), float(pair[1])
         except (TypeError, ValueError):
-            raise ValueError(f"PID {pid_index} 的 {field} 边界必须是数字。")
+            raise RequestValidationError(
+                f"PID {pid_index} 的 {field} 边界必须是数字。",
+                "PID_BOUNDS_INVALID", input_field
+            )
         if not all(map(lambda item: item == item and abs(item) != float("inf"), (low, high))):
-            raise ValueError(f"PID {pid_index} 的 {field} 边界必须是有限数字。")
+            raise RequestValidationError(
+                f"PID {pid_index} 的 {field} 边界必须是有限数字。",
+                "PID_BOUNDS_INVALID", input_field
+            )
         if low > high:
-            raise ValueError(f"PID {pid_index} 的 {field} 最小值不能大于最大值。")
+            raise RequestValidationError(
+                f"PID {pid_index} 的 {field} 最小值不能大于最大值。",
+                "PID_BOUNDS_REVERSED", input_field
+            )
         result[field] = [low, high]
     return result
 
 
 def normalize_custom_payload(payload):
     if not isinstance(payload, dict):
-        raise ValueError("请求配置必须是 JSON 对象。")
+        raise RequestValidationError("请求配置必须是 JSON 对象。")
     model_path = normalize_model_path(payload.get("modelPath"))
     raw_blocks = payload.get("pidBlocks")
     if not isinstance(raw_blocks, list) or not 1 <= len(raw_blocks) <= 2:
-        raise ValueError("请选择一个或两个 PID 控制器。")
+        raise RequestValidationError(
+            "请选择一个或两个 PID 控制器。", "PID_SELECTION_INVALID", "pidBlocks"
+        )
 
     blocks = []
     for index, block in enumerate(raw_blocks, 1):
         path = str((block or {}).get("path") or "").strip()
         if not path:
-            raise ValueError(f"PID {index} 缺少 Simulink 块路径。")
+            raise RequestValidationError(
+                f"PID {index} 缺少 Simulink 块路径。",
+                "PID_PATH_REQUIRED", f"pidBlocks[{index - 1}].path"
+            )
         blocks.append({
             "name": str((block or {}).get("name") or f"pid{index}"),
             "path": path,
@@ -172,9 +261,29 @@ def normalize_custom_payload(payload):
         num_candidates = int(payload.get("numCandidates") or 16)
         random_seed = int(payload.get("randomSeed") or 1)
     except (TypeError, ValueError):
-        raise ValueError("迭代轮数、候选数和随机种子必须是整数。")
-    if max_iterations < 1 or num_candidates < 1:
-        raise ValueError("迭代轮数和每轮候选数必须大于 0。")
+        raise RequestValidationError(
+            "迭代轮数、候选数和随机种子必须是整数。", "SEARCH_CONFIG_INVALID"
+        )
+    if max_iterations < 1:
+        raise RequestValidationError(
+            "迭代轮数必须大于 0。", "SEARCH_CONFIG_INVALID", "maxIterations"
+        )
+    if num_candidates < 1:
+        raise RequestValidationError(
+            "每轮候选数必须大于 0。", "SEARCH_CONFIG_INVALID", "numCandidates"
+        )
+
+    stop_time_text = str(payload.get("stopTime") or "10").strip()
+    try:
+        stop_time_value = float(stop_time_text)
+    except (TypeError, ValueError):
+        raise RequestValidationError(
+            "仿真停止时间必须是数字。", "STOP_TIME_INVALID", "stopTime"
+        )
+    if not (stop_time_value > 0 and stop_time_value < float("inf")):
+        raise RequestValidationError(
+            "仿真停止时间必须是正有限数字。", "STOP_TIME_INVALID", "stopTime"
+        )
 
     targets = {}
     for field in (
@@ -184,22 +293,41 @@ def normalize_custom_payload(payload):
     ):
         if field in (payload.get("targets") or {}):
             try:
-                targets[field] = float(payload["targets"][field])
+                value = float(payload["targets"][field])
             except (TypeError, ValueError):
-                raise ValueError(f"验证指标 {field} 必须是数字。")
+                raise RequestValidationError(
+                    f"验证指标 {field} 必须是数字。", "TARGET_INVALID", f"targets.{field}"
+                )
+            if value != value or abs(value) == float("inf") or value < 0:
+                raise RequestValidationError(
+                    f"验证指标 {field} 必须是非负有限数字。",
+                    "TARGET_INVALID", f"targets.{field}"
+                )
+            targets[field] = value
+
+    try:
+        control_upper_limit = float(payload.get("controlUpperLimit") or 1e12)
+    except (TypeError, ValueError):
+        raise RequestValidationError(
+            "控制量上限必须是数字。", "CONTROL_LIMIT_INVALID", "controlUpperLimit"
+        )
+    if not (control_upper_limit > 0 and control_upper_limit < float("inf")):
+        raise RequestValidationError(
+            "控制量上限必须是正有限数字。", "CONTROL_LIMIT_INVALID", "controlUpperLimit"
+        )
 
     return {
         "modelPath": model_path,
-        "workingDirectory": normalize_optional_path(payload.get("workingDirectory"), "工作", True),
-        "projectRoot": normalize_optional_path(payload.get("projectRoot"), "MATLAB Project", True),
-        "projectPath": normalize_optional_path(payload.get("projectPath"), "MATLAB Project", False),
+        "workingDirectory": normalize_optional_directory(payload.get("workingDirectory")),
+        "projectRoot": normalize_optional_directory(payload.get("projectRoot")),
+        "projectPath": normalize_project_path(payload.get("projectPath")),
         "pidBlocks": blocks,
-        "stopTime": str(payload.get("stopTime") or "10"),
+        "stopTime": stop_time_text,
         "referenceSignalName": str(payload.get("referenceSignalName") or "r"),
         "outputSignalName": str(payload.get("outputSignalName") or "y"),
         "controlSignalName": str(payload.get("controlSignalName") or "u"),
         "currentSignalName": str(payload.get("currentSignalName") or ""),
-        "controlUpperLimit": float(payload.get("controlUpperLimit") or 1e12),
+        "controlUpperLimit": control_upper_limit,
         "maxIterations": max_iterations,
         "numCandidates": num_candidates,
         "randomSeed": random_seed,
@@ -207,7 +335,6 @@ def normalize_custom_payload(payload):
         "useParallel": bool(payload.get("useParallel", False)),
         "targets": targets,
     }
-
 
 def trigger_code_backup(job_id):
     if os.environ.get("PID_GIT_AUTO_BACKUP", "1").lower() in ("0", "false", "off"):
@@ -247,6 +374,10 @@ def launch_job(job_id, script):
                 stream.write(line)
                 stream.flush()
         return_code = process.wait()
+        try:
+            script.unlink()
+        except OSError:
+            pass
         if return_code != 0:
             current = read_status(job_id) or {}
             current.update({
@@ -271,9 +402,9 @@ def start_custom_job(payload):
     config_file = run_dir / "request_config.json"
     config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    script = ROOT / "local_pid_gateway" / f"run_{job_id}.m"
+    script = run_dir / "run_job.m"
     script.write_text(
-        "cd('{root}');\naddpath(genpath(pwd));\nrun_pid_tuning_from_json('{config}');\n".format(
+        "root='{root}';\ncd(root);\naddpath(root, fullfile(root,'pid_tuning_core'), fullfile(root,'pid_project_manager'), fullfile(root,'examples'));\nrun_pid_tuning_from_json('{config}');\n".format(
             root=matlab_quote(ROOT.as_posix()),
             config=matlab_quote(config_file.as_posix()),
         ),
@@ -292,7 +423,21 @@ def start_custom_job(payload):
         "elapsedSeconds": 0,
         "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
-    launch_job(job_id, script)
+    try:
+        launch_job(job_id, script)
+    except Exception as error:
+        write_status(job_id, {
+            "jobId": job_id,
+            "status": "failed",
+            "modelName": model_name,
+            "error": str(error),
+            "updatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        try:
+            script.unlink()
+        except OSError:
+            pass
+        raise
     return job_id
 
 
@@ -322,7 +467,8 @@ def inspect_model(model_path):
     response_file = ROOT / "local_pid_gateway" / f"{request_id}_result.json"
     request_file.write_text(json.dumps({"modelPath": normalize_model_path(model_path)}, ensure_ascii=False), encoding="utf-8")
     command = (
-        "cd('{root}'); addpath(genpath(pwd)); "
+        "root='{root}'; cd(root); "
+        "addpath(root, fullfile(root,'pid_tuning_core'), fullfile(root,'pid_project_manager'), fullfile(root,'examples')); "
         "inspect_pid_model_from_json('{request}', '{response}');"
     ).format(
         root=matlab_quote(ROOT.as_posix()),
@@ -390,7 +536,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
-    def send_json(self, obj, status=200):
+    def send_json(self, obj, status=200, request_id=""):
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -398,13 +544,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
+        if request_id:
+            self.send_header("X-Request-ID", request_id)
         self.end_headers()
         self.wfile.write(data)
+
+    def send_api_error(self, error, status, request_id, path, payload=None):
+        log_request(request_id, "POST", path, status, payload, error)
+        default_code = "INTERNAL_ERROR" if status >= 500 else "INVALID_REQUEST"
+        self.send_json(error_payload(error, request_id, default_code), status, request_id)
 
     def read_json_body(self):
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > 2 * 1024 * 1024:
-            raise ValueError("请求正文为空或过大。")
+            raise RequestValidationError("请求正文为空或过大。", "REQUEST_BODY_INVALID")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_OPTIONS(self):
@@ -418,32 +571,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        request_id = new_id("req")
+        payload = None
         try:
             if path == "/api/pid/jobs/demo":
                 job_id = start_demo_job()
-                self.send_json({"jobId": job_id, "status": "started"})
+                log_request(request_id, "POST", path, 200)
+                self.send_json({"jobId": job_id, "status": "started", "requestId": request_id}, 200, request_id)
                 return
             if path == "/api/pid/jobs/custom":
-                job_id = start_custom_job(self.read_json_body())
-                self.send_json({"jobId": job_id, "status": "started"})
+                payload = self.read_json_body()
+                job_id = start_custom_job(payload)
+                log_request(request_id, "POST", path, 200, payload)
+                self.send_json({"jobId": job_id, "status": "started", "requestId": request_id}, 200, request_id)
                 return
             if path == "/api/pid/models/discover":
-                self.send_json(inspect_model(self.read_json_body().get("modelPath")))
+                payload = self.read_json_body()
+                result = inspect_model(payload.get("modelPath"))
+                log_request(request_id, "POST", path, 200, payload)
+                self.send_json(result, 200, request_id)
                 return
             if path == "/api/pid/models/select":
                 selected = select_model_file()
-                self.send_json({"modelPath": selected, "cancelled": not bool(selected)})
+                log_request(request_id, "POST", path, 200)
+                self.send_json({"modelPath": selected, "cancelled": not bool(selected)}, 200, request_id)
                 return
         except json.JSONDecodeError:
-            self.send_json({"error": "JSON 请求格式不正确。"}, 400)
+            error = RequestValidationError("JSON 请求格式不正确。", "JSON_INVALID")
+            self.send_api_error(error, 400, request_id, path, payload)
             return
         except ValueError as error:
-            self.send_json({"error": str(error)}, 400)
+            self.send_api_error(error, 400, request_id, path, payload)
             return
         except Exception as error:
-            self.send_json({"error": str(error)}, 500)
+            self.send_api_error(error, 500, request_id, path, payload)
             return
-        self.send_json({"error": "not found"}, 404)
+        error = RequestValidationError("接口不存在。", "NOT_FOUND")
+        self.send_api_error(error, 404, request_id, path, payload)
 
     def do_GET(self):
         path = urlparse(self.path).path

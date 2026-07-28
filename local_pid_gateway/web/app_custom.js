@@ -363,8 +363,17 @@ function handleMatlabGatewayResponse(event) {
   if (!pending) return;
   window.clearTimeout(pending.timeout);
   pendingGatewayRequests.delete(String(data.id));
-  if (data.ok) pending.resolve(data.payload ?? {});
-  else pending.reject(new Error(String(data.error || '本地网关请求失败')));
+  if (data.ok) {
+    pending.resolve(data.payload ?? {});
+  } else {
+    const payload = data.payload ?? {};
+    const error = new Error(String(payload.message || payload.error || data.error || '本地网关请求失败'));
+    error.code = payload.code || '';
+    error.field = payload.field || '';
+    error.requestId = payload.requestId || '';
+    error.statusCode = Number(data.statusCode || 0);
+    pending.reject(error);
+  }
 }
 
 async function api(path, options = {}) {
@@ -372,7 +381,14 @@ async function api(path, options = {}) {
   const response = await fetch(apiUrl(path), options);
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
-  if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  if (!response.ok) {
+    const error = new Error(payload.message || payload.error || `${response.status} ${response.statusText}`);
+    error.code = payload.code || '';
+    error.field = payload.field || '';
+    error.requestId = payload.requestId || response.headers.get('X-Request-ID') || '';
+    error.statusCode = response.status;
+    throw error;
+  }
   return payload;
 }
 function apiErrorText(error, action) {
@@ -380,7 +396,9 @@ function apiErrorText(error, action) {
   if (/failed to fetch|networkerror|load failed/i.test(message)) {
     return `${action}失败：无法连接本地 PID 网关，请重新打开 PID Agent 后再试`;
   }
-  return `${action}失败：${message}`;
+  const field = error?.field ? `；字段：${error.field}` : '';
+  const requestId = error?.requestId ? `；请求：${error.requestId}` : '';
+  return `${action}失败：${message}${field}${requestId}`;
 }
 
 function jsonPost(body) {
@@ -585,10 +603,43 @@ function renderPidEditors() {
   }).join('') || '<div class="warn">请至少选择一个 PID。</div>';
 }
 
-function numberFrom(id) {
-  const result = Number(el(id).value);
-  if (!Number.isFinite(result)) throw new Error(`${id} 必须是数字`);
+function validationError(id, message) {
+  const input = el(id);
+  if (input) {
+    input.classList.add('input-error');
+    input.focus();
+  }
+  throw new Error(message);
+}
+
+function requiredText(id, label) {
+  const input = el(id);
+  const result = String(input?.value || '').trim();
+  if (!result) validationError(id, `${label}不能为空`);
   return result;
+}
+
+function numberFrom(id, options = {}) {
+  const input = el(id);
+  const raw = String(input?.value ?? '').trim();
+  const label = options.label || id;
+  if (!raw) validationError(id, `${label}不能为空`);
+  const result = Number(raw);
+  if (!Number.isFinite(result)) validationError(id, `${label}必须是有限数字`);
+  if (options.integer && !Number.isInteger(result)) validationError(id, `${label}必须是整数`);
+  if (options.min !== undefined && result < options.min) validationError(id, `${label}不能小于 ${options.min}`);
+  if (options.max !== undefined && result > options.max) validationError(id, `${label}不能大于 ${options.max}`);
+  input.classList.remove('input-error');
+  return result;
+}
+
+function isLocalApiUrl(urlText) {
+  try {
+    const hostname = new URL(urlText).hostname.toLowerCase();
+    return ['127.0.0.1', 'localhost', '::1'].includes(hostname);
+  } catch (_) {
+    return false;
+  }
 }
 
 /* =========================================================================
@@ -792,21 +843,28 @@ function updateAiSummary() {
   }
 }
 
-function collectAiConfig() {
+function collectAiConfig(totalCandidates) {
   const mode = el('aiModeSelect').value;
+  const candidateCount = mode === 'none' ? 0 : numberFrom('aiCandidateCountInput', {
+    label: 'AI 每轮候选数', integer: true, min: 1, max: totalCandidates,
+  });
   const config = {
     mode,
-    candidatesPerIteration: mode === 'none' ? 0 : numberFrom('aiCandidateCountInput'),
+    candidatesPerIteration: candidateCount,
     maxHistoryRecords: 12,
     failOnError: el('aiFailOnErrorInput').checked,
   };
   if (mode === 'api') {
+    const baseUrl = requiredText('aiBaseUrlInput', 'API Base URL');
+    try { new URL(baseUrl); } catch (_) { validationError('aiBaseUrlInput', 'API Base URL 格式不正确'); }
+    const apiKey = el('aiApiKeyInput').value.trim();
+    if (!apiKey && !isLocalApiUrl(baseUrl)) validationError('aiApiKeyInput', '远程 API 必须填写 API Key');
     config.api = {
-      baseUrl: el('aiBaseUrlInput').value.trim(),
-      model: el('aiModelInput').value.trim(),
-      apiKey: el('aiApiKeyInput').value.trim(),
-      temperature: numberFrom('aiTemperatureInput'),
-      timeoutSeconds: numberFrom('aiApiTimeoutInput'),
+      baseUrl,
+      model: requiredText('aiModelInput', 'API 模型名'),
+      apiKey,
+      temperature: numberFrom('aiTemperatureInput', { label: 'Temperature', min: 0, max: 2 }),
+      timeoutSeconds: numberFrom('aiApiTimeoutInput', { label: 'API 超时', min: 5, max: 1800 }),
       maxTokens: 2000,
     };
   } else if (mode === 'agent') {
@@ -815,7 +873,7 @@ function collectAiConfig() {
       executable: el('agentExecutableInput').value.trim(),
       model: el('agentModelInput').value.trim(),
       name: el('agentNameInput').value.trim() || 'mavis',
-      timeoutSeconds: numberFrom('agentTimeoutInput'),
+      timeoutSeconds: numberFrom('agentTimeoutInput', { label: 'Code Agent 超时', min: 5, max: 1800 }),
       pythonExe: 'python',
     };
   }
@@ -823,32 +881,51 @@ function collectAiConfig() {
 }
 function collectCustomConfig() {
   if (!state.modelInfo) throw new Error('请先读取 Simulink 模型。');
-  if (!state.selectedPidIndexes.length) throw new Error('请至少选择一个 PID。');
+  if (!state.selectedPidIndexes.length || state.selectedPidIndexes.length > 2) {
+    throw new Error('请选择一个或两个 PID。');
+  }
+  const modelPath = String(state.modelInfo.modelPath || el('modelPathInput').value || '').trim();
+  if (!/\.(slx|mdl)$/i.test(modelPath)) {
+    throw new Error('当前模型尚未保存为 .slx 或 .mdl 文件，请先保存模型。');
+  }
   const blocks = state.modelInfo.pidBlocks;
-  const pidBlocks = state.selectedPidIndexes.map((index) => {
+  const pidBlocks = state.selectedPidIndexes.map((index, position) => {
+    if (!blocks[index]?.path) throw new Error(`PID ${position + 1} 缺少 Simulink 块路径。`);
     const bounds = {};
     ['Kp', 'Ki', 'Kd', 'N'].forEach((field) => {
-      bounds[field] = [numberFrom(`pid-${index}-${field}-min`), numberFrom(`pid-${index}-${field}-max`)];
+      const lowId = `pid-${index}-${field}-min`;
+      const highId = `pid-${index}-${field}-max`;
+      const low = numberFrom(lowId, { label: `PID ${position + 1} ${field} 最小值` });
+      const high = numberFrom(highId, { label: `PID ${position + 1} ${field} 最大值` });
+      if (low > high) validationError(lowId, `PID ${position + 1} 的 ${field} 最小值不能大于最大值`);
+      bounds[field] = [low, high];
     });
-    return { name: el(`pid-${index}-name`).value.trim(), path: blocks[index].path, bounds };
+    return { name: el(`pid-${index}-name`).value.trim() || `pid${position + 1}`, path: blocks[index].path, bounds };
   });
+  const maxIterations = numberFrom('maxIterationsInput', { label: '迭代轮数', integer: true, min: 1 });
+  const numCandidates = numberFrom('numCandidatesInput', { label: '每轮候选数', integer: true, min: 1 });
+  const stopTime = numberFrom('stopTimeInput', { label: '仿真停止时间', min: Number.MIN_VALUE });
   return {
-    modelPath: state.modelInfo.modelPath || el('modelPathInput').value.trim(), pidBlocks,
+    modelPath,
+    pidBlocks,
     workingDirectory: state.simulinkContext?.workingDirectory || '',
     projectRoot: state.simulinkContext?.projectRoot || '',
     projectPath: state.simulinkContext?.projectPath || '',
-    referenceSignalName: el('referenceSignalInput').value.trim(), outputSignalName: el('outputSignalInput').value.trim(),
-    controlSignalName: el('controlSignalInput').value.trim(), stopTime: el('stopTimeInput').value,
-    maxIterations: numberFrom('maxIterationsInput'), numCandidates: numberFrom('numCandidatesInput'),
+    referenceSignalName: requiredText('referenceSignalInput', '参考信号名'),
+    outputSignalName: requiredText('outputSignalInput', '输出信号名'),
+    controlSignalName: requiredText('controlSignalInput', '控制信号名'),
+    stopTime: String(stopTime),
+    maxIterations,
+    numCandidates,
     stopOnFirstPass: el('stopOnFirstPassInput').checked,
-    ai: collectAiConfig(),
+    ai: collectAiConfig(numCandidates),
     targets: {
-      overshootPctMax: numberFrom('overshootTargetInput'), settlingTimeMax: numberFrom('settlingTargetInput'),
-      steadyStateErrorAbsMax: numberFrom('errorTargetInput'),
+      overshootPctMax: numberFrom('overshootTargetInput', { label: '最大超调量', min: 0 }),
+      settlingTimeMax: numberFrom('settlingTargetInput', { label: '最大调节时间', min: 0 }),
+      steadyStateErrorAbsMax: numberFrom('errorTargetInput', { label: '最大稳态误差', min: 0 }),
     },
   };
 }
-
 async function startCustom() {
   const button = el('startCustomButton');
   button.disabled = true;
@@ -858,7 +935,7 @@ async function startCustom() {
     state.activeJobId = payload.jobId;
     await refreshJob();
   } catch (error) {
-    setScanState(`启动失败：${error.message}`, true);
+    setScanState(apiErrorText(error, '启动'), true);
   } finally {
     button.disabled = false;
     button.textContent = '启动当前模型调参';

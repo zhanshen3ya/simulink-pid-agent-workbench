@@ -13,11 +13,14 @@ if isempty(raw.pidBlocks)
 end
 
 rootDir = fileparts(mfilename("fullpath"));
-addpath(genpath(rootDir));
+addpath(rootDir);
+addpath(fullfile(rootDir, "pid_tuning_core"));
+addpath(fullfile(rootDir, "pid_project_manager"));
+addpath(fullfile(rootDir, "examples"));
 
 if isfield(raw, "projectPath") && strlength(string(raw.projectPath)) > 0
     projectPath = string(raw.projectPath);
-    if isfile(projectPath)
+    if isfile(projectPath) || isfolder(projectPath)
         try
             openProject(projectPath);
         catch exception
