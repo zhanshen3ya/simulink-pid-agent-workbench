@@ -40,6 +40,30 @@ def single_loop_payload(model, **overrides):
     return payload
 
 
+def dual_loop_payload(model, **overrides):
+    payload = single_loop_payload(model)
+    payload["pidBlocks"].append({
+        "name": "Inner PID", "path": "controller/Inner PID",
+        "bounds": {"Kp": [0, 10], "Ki": [0, 10], "Kd": [0, 1], "N": [1, 1000]},
+    })
+    payload["availableSignalNames"].append("iRef")
+    payload["evaluationLoops"][0].update({
+        "role": "outer", "controlSignalName": "iRef", "primary": True,
+        "targets": {"overshootPctMax": 10, "settlingTimeMax": 2, "steadyStateErrorAbsMax": 0.1},
+    })
+    payload["evaluationLoops"].append({
+        "name": "current", "role": "inner", "pidPath": "controller/Inner PID",
+        "referenceSignalName": "iRef", "outputSignalName": "iL",
+        "controlSignalName": "duty", "currentSignalName": "iL",
+        "weight": 1, "primary": False,
+        "controlLowerLimit": 0, "controlUpperLimit": 1,
+        "targets": {"overshootPctMax": 15, "settlingTimeMax": 0.5, "steadyStateErrorAbsMax": 0.1},
+    })
+    payload["searchStrategy"] = "auto"
+    payload.update(overrides)
+    return payload
+
+
 class EmbeddedIntegrationTests(unittest.TestCase):
     def test_custom_payload_preserves_matlab_context_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -118,13 +142,14 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 "bounds": {"Kp": [0, 10], "Ki": [0, 10], "Kd": [0, 1], "N": [1, 1000]},
             })
             payload["evaluationLoops"][0]["role"] = "outer"
+            payload["evaluationLoops"][0]["controlSignalName"] = "iRef"
             payload["evaluationLoops"].append({
                 "name": "current", "role": "inner", "pidPath": "controller/Inner PID",
                 "referenceSignalName": "iRef", "outputSignalName": "iL",
                 "controlSignalName": "duty", "currentSignalName": "iL",
                 "weight": 1, "primary": False,
                 "controlLowerLimit": 0, "controlUpperLimit": 1,
-                "targets": {"overshootPctMax": 20},
+                "targets": {"overshootPctMax": 20, "settlingTimeMax": 0.5},
             })
             payload["availableSignalNames"].append("iRef")
             payload["searchStrategy"] = "cascade"
@@ -134,6 +159,48 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             with self.assertRaises(server_custom.RequestValidationError) as raised:
                 server_custom.normalize_custom_payload(payload)
             self.assertEqual(raised.exception.code, "CASCADE_ROLE_REQUIRED")
+
+    def test_auto_coupled_dual_loop_uses_joint_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            for loop in payload["evaluationLoops"]:
+                loop["role"] = "coupled"
+            normalized = server_custom.normalize_custom_payload(payload)
+            self.assertEqual({loop["role"] for loop in normalized["evaluationLoops"]}, {"coupled"})
+            self.assertEqual(normalized["searchStrategy"], "auto")
+
+    def test_cascade_requires_outer_to_drive_inner_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            payload["evaluationLoops"][0]["controlSignalName"] = "duty"
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CASCADE_SIGNAL_CHAIN_INVALID")
+
+    def test_cascade_requires_outer_primary_loop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            payload["evaluationLoops"][0]["primary"] = False
+            payload["evaluationLoops"][1]["primary"] = True
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CASCADE_PRIMARY_OUTER_REQUIRED")
+
+    def test_cascade_requires_faster_inner_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            payload["evaluationLoops"][1]["targets"]["settlingTimeMax"] = 2
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CASCADE_TARGET_ORDER_INVALID")
 
     def test_loop_control_limits_must_be_ordered(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -199,6 +266,27 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             finally:
                 server_custom.RUNS = original_runs
             self.assertEqual(raised.exception.code, "JOB_NOT_COMPLETED")
+
+    def test_job_status_includes_bound_model_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            job = run_root / "job-1"
+            job.mkdir()
+            (job / "current_status.json").write_text(
+                json.dumps({"status": "completed", "modelName": "demo"}),
+                encoding="utf-8",
+            )
+            (job / "request_config.json").write_text(
+                json.dumps({"modelPath": r"D:\models\demo.slx"}),
+                encoding="utf-8",
+            )
+            original_runs = server_custom.RUNS
+            try:
+                server_custom.RUNS = run_root
+                status = server_custom.read_status("job-1")
+            finally:
+                server_custom.RUNS = original_runs
+            self.assertEqual(status["modelPath"], r"D:\models\demo.slx")
 
     def test_job_list_ignores_incomplete_run_directories(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -267,6 +355,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn('id="signalMappingConfirmedInput"', html)
         self.assertIn('id="bestLoopMetricRows"', html)
         self.assertIn('id="stageSummaryRows"', html)
+        self.assertIn('id="jobContextWarning"', html)
         self.assertIn('<th>诊断</th>', html)
         self.assertIn('<th>所属系统</th>', html)
         self.assertIn('我已核对双环关系', html)
@@ -276,7 +365,9 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         app_v2_js = (ROOT / "local_pid_gateway" / "web" / "app_custom_v2.js").read_text(encoding="utf-8")
         self.assertIn("button.primary-button:disabled", styles)
         self.assertIn(".loop-relationship.warning", styles)
+        self.assertIn("body.embedded-mode .title-strip", styles)
         self.assertIn("renderEffectEvaluation({})", app_js)
+        self.assertIn("enforceModelMatch: true", app_js)
         self.assertIn("apiViaMatlab(path, options)", app_js)
         self.assertIn("sendMatlabEvent('GatewayRequest'", app_js)
         self.assertIn("function validationError", app_js)
@@ -298,6 +389,13 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("scoped.length >= 3", app_v2_js)
         self.assertIn("function jobMatchesPreferredModel", app_v2_js)
         self.assertIn("state.enforceModelMatch = true", app_v2_js)
+        self.assertIn("state.activeJobMatchesModel", app_v2_js)
+        self.assertIn("当前显示的是其他模型的历史任务", app_v2_js)
+        self.assertIn("document.body.classList.add('embedded-mode')", app_v2_js)
+        self.assertIn("outer.controlSignalName !== inner.referenceSignalName", app_v2_js)
+        self.assertIn("inner.targets.settlingTimeMax < outer.targets.settlingTimeMax", app_v2_js)
+        self.assertIn("MATLAB 正在读取模型，已等待", app_v2_js)
+        self.assertIn("number.toExponential(2)", app_v2_js)
         self.assertNotIn("/api/pid/jobs/demo/buck", app_v2_js)
 
         matlab_app = (ROOT / "+pid_agent_ui" / "PidAgentWebApp.m").read_text(encoding="utf-8")

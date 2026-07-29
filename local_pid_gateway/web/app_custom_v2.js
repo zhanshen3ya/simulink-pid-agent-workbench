@@ -191,7 +191,16 @@ function renderSignalMapping() {
     const block = blocks[index] || {};
     const suggestion = block.signalSuggestion || {};
     const previous = saved[String(block.path)] || {};
-    const role = previous.role || suggestedRole(block, total);
+    const allowedRoles = total === 1 ? ['single'] : ['inner', 'outer', 'coupled'];
+    const previousRole = String(previous.role || '');
+    const role = allowedRoles.includes(previousRole) ? previousRole : suggestedRole(block, total);
+    const roleTargets = total === 2 && role === 'inner'
+      ? { ...globalTargets, settling: String(Math.max(Number.EPSILON, Number(globalTargets.settling) / 3)) }
+      : globalTargets;
+    const settlingWasDefault = !previous.settling
+      || String(previous.settling) === String(globalTargets.settling);
+    const settlingTarget = role === 'inner' && previousRole !== role && settlingWasDefault
+      ? roleTargets.settling : (previous.settling || roleTargets.settling);
     const reference = previous.reference || validSuggestedSignal(suggestion.referenceSignalName);
     const output = previous.output || validSuggestedSignal(suggestion.outputSignalName);
     const control = previous.control || validSuggestedSignal(suggestion.controlSignalName);
@@ -215,9 +224,9 @@ function renderSignalMapping() {
       </div>
       <div class="loop-targets">
         <label><span>权重</span><input class="loop-weight" type="number" min="0.000001" step="any" value="${escapeHtml(previous.weight || '1')}"></label>
-        <label><span>超调上限 (%)</span><input class="loop-overshoot" type="number" min="0" step="any" value="${escapeHtml(previous.overshoot || globalTargets.overshoot)}"></label>
-        <label><span>调节时间上限 (s)</span><input class="loop-settling" type="number" min="0" step="any" value="${escapeHtml(previous.settling || globalTargets.settling)}"></label>
-        <label><span>稳态误差上限</span><input class="loop-error" type="number" min="0" step="any" value="${escapeHtml(previous.error || globalTargets.error)}"></label>
+        <label><span>超调上限 (%)</span><input class="loop-overshoot" type="number" min="0" step="any" value="${escapeHtml(previous.overshoot || roleTargets.overshoot)}"></label>
+        <label><span>调节时间上限 (s)</span><input class="loop-settling" type="number" min="0" step="any" value="${escapeHtml(settlingTarget)}"></label>
+        <label><span>稳态误差上限</span><input class="loop-error" type="number" min="0" step="any" value="${escapeHtml(previous.error || roleTargets.error)}"></label>
         <label><span>RMSE 上限</span><input class="loop-rmse" type="number" min="0" step="any" value="${escapeHtml(previous.rmse || '')}" placeholder="可选"></label>
         <label><span>电流峰值上限</span><input class="loop-current-max" type="number" min="0" step="any" value="${escapeHtml(previous.currentMax || '')}" placeholder="可选"></label>
         <label><span>输出纹波上限</span><input class="loop-ripple" type="number" min="0" step="any" value="${escapeHtml(previous.ripple || '')}" placeholder="可选"></label>
@@ -376,9 +385,29 @@ function collectCustomConfig() {
   });
   if (evaluationLoops.filter((loop) => loop.primary).length !== 1) throw new Error('必须且只能选择一个主评价环路。');
   const searchStrategy = el('searchStrategyInput').value;
-  if (evaluationLoops.length === 2 && ['auto', 'cascade'].includes(searchStrategy)) {
+  if (evaluationLoops.length === 2) {
     const roles = new Set(evaluationLoops.map((loop) => loop.role));
-    if (!(roles.has('inner') && roles.has('outer') && roles.size === 2)) throw new Error('级联双环必须分别指定一个内环和一个外环。');
+    const hasCascadeRoles = roles.size === 2 && roles.has('inner') && roles.has('outer');
+    const hasCoupledRoles = roles.size === 1 && roles.has('coupled');
+    if (searchStrategy === 'cascade' && !hasCascadeRoles) {
+      throw new Error('级联策略必须分别指定一个内环和一个外环。');
+    }
+    if (searchStrategy === 'auto' && !hasCascadeRoles && !hasCoupledRoles) {
+      throw new Error('自动策略下，两个 PID 必须是明确的内外环，或都标记为耦合环。');
+    }
+    if (hasCascadeRoles && ['auto', 'cascade'].includes(searchStrategy)) {
+      const inner = evaluationLoops.find((loop) => loop.role === 'inner');
+      const outer = evaluationLoops.find((loop) => loop.role === 'outer');
+      if (!outer.primary) throw new Error('级联双环必须将外环设为主评价环。');
+      if (outer.controlSignalName !== inner.referenceSignalName) {
+        throw new Error('级联信号链不完整：外环控制输出必须与内环参考信号相同。');
+      }
+      if (!(inner.targets.settlingTimeMax < outer.targets.settlingTimeMax)) {
+        throw new Error('级联评价目标不合理：内环调节时间上限必须小于外环。');
+      }
+    }
+  } else if (searchStrategy === 'cascade') {
+    throw new Error('级联策略必须选择两个 PID。');
   }
   if (!el('signalMappingConfirmedInput').checked) validationError('signalMappingConfirmedInput', '请核对并确认全部环路的评价信号与安全限制。');
 
@@ -479,42 +508,89 @@ function drawScoreTrend(history) {
   const context = canvas.getContext('2d');
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
   const points = normalizeList(history).map((record, index) => ({
     x: index, y: Number(record.score), stage: String(record.stage || ''), passed: Boolean(record.passed),
   })).filter((point) => Number.isFinite(point.y));
-  context.strokeStyle = '#c7c7c7'; context.lineWidth = 1;
-  context.beginPath(); context.moveTo(50, 12); context.lineTo(50, 154); context.lineTo(width - 12, 154); context.stroke();
+  const chart = { left: 72, right: width - 12, top: 14, bottom: 154 };
+  context.strokeStyle = '#c7c7c7';
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(chart.left, chart.top);
+  context.lineTo(chart.left, chart.bottom);
+  context.lineTo(chart.right, chart.bottom);
+  context.stroke();
   if (!points.length) {
-    context.fillStyle = '#666'; context.font = '12px Segoe UI'; context.fillText('暂无候选分数', 60, 84); return;
+    context.fillStyle = '#666';
+    context.font = '12px Segoe UI';
+    context.fillText('暂无候选分数', chart.left + 10, 84);
+    return;
   }
   const rawValues = points.map((point) => point.y);
-  const rawMin = Math.min(...rawValues), rawMax = Math.max(...rawValues);
+  const rawMin = Math.min(...rawValues);
+  const rawMax = Math.max(...rawValues);
   const smallestPositive = Math.min(...rawValues.filter((number) => number > 0));
   const useLog = rawMin >= 0 && (rawMax > 1e6 || (Number.isFinite(smallestPositive) && rawMax / smallestPositive > 100));
   const plotted = points.map((point) => ({ ...point, plotY: useLog ? Math.log10(1 + point.y) : point.y }));
   const plotValues = plotted.map((point) => point.plotY);
-  let plotMin = Math.min(...plotValues), plotMax = Math.max(...plotValues);
+  let plotMin = Math.min(...plotValues);
+  let plotMax = Math.max(...plotValues);
   if (plotMax <= plotMin) plotMax = plotMin + 1;
-  const xScale = (width - 72) / Math.max(1, plotted.length - 1);
-  const yScale = (154 - 14) / (plotMax - plotMin);
-  context.fillStyle = '#555'; context.font = '11px Segoe UI';
-  context.fillText(fmt.format(rawMax), 3, 17); context.fillText(fmt.format(rawMin), 3, 154);
-  if (useLog) context.fillText('对数刻度', 56, 17);
-  context.strokeStyle = '#0072bd'; context.lineWidth = 1.6; context.beginPath();
+  const xScale = (chart.right - chart.left) / Math.max(1, plotted.length - 1);
+  const yScale = (chart.bottom - chart.top) / (plotMax - plotMin);
+  const chartValue = (number) => {
+    const absolute = Math.abs(number);
+    return absolute >= 1e6 || (absolute > 0 && absolute < 0.001)
+      ? number.toExponential(2) : fmt.format(number);
+  };
+  context.fillStyle = '#555';
+  context.font = '11px Segoe UI';
+  context.textAlign = 'right';
+  context.textBaseline = 'middle';
+  [0, 0.5, 1].forEach((fraction) => {
+    const y = chart.bottom - fraction * (chart.bottom - chart.top);
+    const plotValue = plotMin + fraction * (plotMax - plotMin);
+    const rawValue = useLog ? Math.max(0, (10 ** plotValue) - 1) : plotValue;
+    context.strokeStyle = '#e2e2e2';
+    context.beginPath();
+    context.moveTo(chart.left, y);
+    context.lineTo(chart.right, y);
+    context.stroke();
+    context.fillStyle = '#555';
+    context.fillText(chartValue(rawValue), chart.left - 6, y);
+  });
+  context.textAlign = 'left';
+  context.textBaseline = 'alphabetic';
+  if (useLog) context.fillText('对数刻度', chart.right - 48, chart.top + 10);
+  context.strokeStyle = '#0072bd';
+  context.lineWidth = 1.6;
+  context.beginPath();
   plotted.forEach((point, index) => {
-    const x = 50 + index * xScale, y = 154 - (point.plotY - plotMin) * yScale;
+    const x = chart.left + index * xScale;
+    const y = chart.bottom - (point.plotY - plotMin) * yScale;
     if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
   });
   context.stroke();
   plotted.forEach((point, index) => {
-    const x = 50 + index * xScale, y = 154 - (point.plotY - plotMin) * yScale;
-    context.fillStyle = point.passed ? '#2e7d32' : '#0072bd'; context.beginPath(); context.arc(x, y, point.passed ? 3 : 2, 0, Math.PI * 2); context.fill();
+    const x = chart.left + index * xScale;
+    const y = chart.bottom - (point.plotY - plotMin) * yScale;
+    context.fillStyle = point.passed ? '#2e7d32' : '#0072bd';
+    context.beginPath();
+    context.arc(x, y, point.passed ? 3 : 2, 0, Math.PI * 2);
+    context.fill();
     if (index > 0 && point.stage !== plotted[index - 1].stage) {
-      context.strokeStyle = '#888'; context.setLineDash([3, 3]); context.beginPath(); context.moveTo(x, 14); context.lineTo(x, 154); context.stroke(); context.setLineDash([]);
+      context.strokeStyle = '#888';
+      context.setLineDash([3, 3]);
+      context.beginPath();
+      context.moveTo(x, chart.top);
+      context.lineTo(x, chart.bottom);
+      context.stroke();
+      context.setLineDash([]);
     }
   });
 }
+
 function stageText(payload) {
   const name = String(payload.currentStage || payload.current?.stage || '').trim();
   const index = Number(payload.stageIndex || 0), count = Number(payload.stageCount || 0);
@@ -555,6 +631,13 @@ function renderStatus(payload) {
   el('passedText').textContent = value(payload.passedCount, 0);
   el('stageText').textContent = stageText(payload);
   const status = value(payload.status, 'idle').toLowerCase();
+  const hasJob = Boolean(payload.jobId);
+  state.activeJobMatchesModel = hasJob && Boolean(state.modelInfo) && jobMatchesPreferredModel(payload);
+  const contextWarning = el('jobContextWarning');
+  const showContextWarning = hasJob && Boolean(state.modelInfo) && !state.activeJobMatchesModel;
+  contextWarning.textContent = showContextWarning
+    ? '当前显示的是其他模型的历史任务；参数写入和回滚已禁用。' : '';
+  contextWarning.classList.toggle('hidden', !showContextWarning);
   el('statusPill').textContent = statusLabel(status);
   el('statusPill').className = `status-pill ${status}`;
   const current = recordOrNull(payload.current);
@@ -572,13 +655,17 @@ function renderStatus(payload) {
   el('bestScore').textContent = best ? `score=${value(best.score)}` : '暂无';
   renderPidRows('bestPidRows', best);
   el('bestMetrics').innerHTML = metricRows(pickMetrics(best));
-  const canApply = status === 'completed' && Boolean(bestPassing) && !Boolean(payload.resultApplied);
+  const canApply = status === 'completed' && Boolean(bestPassing)
+    && !Boolean(payload.resultApplied) && state.activeJobMatchesModel;
   el('applyBestButton').disabled = !canApply;
-  el('rollbackBestButton').disabled = !Boolean(payload.rollbackAvailable || payload.resultApplied);
-  el('applyState').textContent = payload.resultApplied
-    ? '参数已写入模型，可回滚'
-    : (status !== 'completed' ? '任务完成且最终阶段全部环路通过后才能写入'
-      : (bestPassing ? '最终结果已通过全部环路硬指标，可以写入' : '只有通过全部硬指标的最终结果可以写入'));
+  el('rollbackBestButton').disabled = !state.activeJobMatchesModel
+    || !Boolean(payload.rollbackAvailable || payload.resultApplied);
+  el('applyState').textContent = hasJob && !state.activeJobMatchesModel
+    ? '请先读取该任务对应的模型，确认模型路径后才能写入或回滚'
+    : (payload.resultApplied
+      ? '参数已写入模型，可回滚'
+      : (status !== 'completed' ? '任务完成且最终阶段全部环路通过后才能写入'
+        : (bestPassing ? '最终结果已通过全部环路硬指标，可以写入' : '只有通过全部硬指标的最终结果可以写入')));
   drawScoreTrend(state.history);
 }
 
@@ -587,10 +674,13 @@ async function refreshHealth() {
     const payload = await api('/api/health');
     state.health = payload;
     const ready = payload.matlabReady ?? payload.matlabAvailable;
+    const checking = !ready && payload.matlabAvailable
+      && (!payload.matlabCheckedAt || String(payload.matlabProbeError || '').includes('正在检查'));
     el('serverVersion').textContent = payload.serverVersion || '--';
     const connection = el('connectionState');
     connection.textContent = ready ? 'MATLAB 可用'
-      : (payload.matlabAvailable ? '网关已连接，MATLAB 检查未通过' : '网关已连接，未找到 MATLAB');
+      : (checking ? 'MATLAB 已安装，检查中'
+        : (payload.matlabAvailable ? '网关已连接，MATLAB 检查未通过' : '网关已连接，未找到 MATLAB'));
     connection.title = payload.matlabProbeError || '';
     sendMatlabEvent('GatewayStatus', { ok: true, matlabAvailable: Boolean(ready), error: payload.matlabProbeError || '' });
     return true;
@@ -657,6 +747,10 @@ async function refreshJob() {
 
 async function applyBestResult() {
   if (!state.activeJobId) return;
+  if (!state.activeJobMatchesModel) {
+    el('applyState').textContent = '当前任务与已读取模型不一致，禁止写入';
+    return;
+  }
   const button = el('applyBestButton');
   button.disabled = true;
   el('applyState').textContent = '正在备份并写入模型参数...';
@@ -671,6 +765,10 @@ async function applyBestResult() {
 
 async function rollbackBestResult() {
   if (!state.activeJobId) return;
+  if (!state.activeJobMatchesModel) {
+    el('applyState').textContent = '当前任务与已读取模型不一致，禁止回滚';
+    return;
+  }
   const button = el('rollbackBestButton');
   button.disabled = true;
   el('applyState').textContent = '正在恢复写入前参数...';
@@ -739,7 +837,23 @@ async function discoverModel() {
   const previousModelPath = String(state.modelInfo?.modelPath || '');
   const previousPaths = new Set(state.selectedPidIndexes.map((index) => String(state.modelInfo?.pidBlocks?.[index]?.path || '')).filter(Boolean));
   button.disabled = true;
-  button.textContent = 'MATLAB 读取中...';
+  state.enforceModelMatch = true;
+  state.preferredModelPath = modelPath;
+  state.preferredModelName = '';
+  state.activeJobId = null;
+  state.modelInfo = null;
+  state.selectedPidIndexes = [];
+  state.history = [];
+  el('modelConfigBody').classList.add('hidden');
+  renderStatus({ status: 'idle', current: null, best: null, bestPassing: null });
+  renderHistory([]);
+  const scanStartedAt = Date.now();
+  const scanProgress = window.setInterval(() => {
+    const elapsed = Math.floor((Date.now() - scanStartedAt) / 1000);
+    button.textContent = `读取中 ${secondsToClock(elapsed)}`;
+    setScanState(`MATLAB 正在读取模型，已等待 ${elapsed} 秒`);
+  }, 1000);
+  button.textContent = '读取中 00:00:00';
   setScanState('正在启动 MATLAB 并读取模型');
   try {
     const payload = await api('/api/pid/models/discover', jsonPost({ modelPath }));
@@ -771,6 +885,7 @@ async function discoverModel() {
     el('modelConfigBody').classList.add('hidden');
     setScanState(error.message, true);
   } finally {
+    window.clearInterval(scanProgress);
     button.disabled = false;
     button.textContent = '读取模型';
   }
@@ -779,6 +894,7 @@ async function discoverModel() {
 function applyEmbeddedContext(context) {
   if (!context || !context.embedded) return;
   state.embedded = true;
+  document.body.classList.add('embedded-mode');
   state.apiBaseUrl = String(context.apiBaseUrl || 'http://127.0.0.1:8788');
   state.simulinkContext = context;
   el('selectModelButton').classList.add('hidden');

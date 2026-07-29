@@ -21,6 +21,18 @@ verifyEqual(testCase, stages(1).evaluationLoopIndices, 1);
 verifyEqual(testCase, stages(2).evaluationLoopIndices, [1, 2]);
 end
 
+function testAutoCoupledPlanUsesJointStage(testCase)
+cfg = localConfig();
+cfg.search.strategy = "auto";
+cfg.evaluationLoops(1).role = "coupled";
+cfg.evaluationLoops(2).role = "coupled";
+stages = pid_tuning_core.buildTuningStages(cfg);
+verifyEqual(testCase, numel(stages), 1);
+verifyEqual(testCase, string(stages.role), "joint");
+verifyEqual(testCase, stages.activePidIndices, [1, 2]);
+verifyEqual(testCase, stages.evaluationLoopIndices, [1, 2]);
+end
+
 function testBothLoopsPassTogether(testCase)
 cfg = localConfig();
 simulation = struct("success", true, "output", localSimulation(false), "error", "");

@@ -9,6 +9,10 @@ const state = {
   apiBaseUrl: '',
   simulinkContext: null,
   signalMappingModelKey: '',
+  preferredModelPath: '',
+  preferredModelName: '',
+  enforceModelMatch: true,
+  activeJobMatchesModel: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -1085,7 +1089,7 @@ async function startCustom() {
     setScanState(apiErrorText(error, '启动'), true);
   } finally {
     button.disabled = false;
-    button.textContent = '启动当前模型调参';
+    button.textContent = '开始调参';
   }
 }
 
@@ -1094,6 +1098,9 @@ async function startSingleDemo() {
   button.disabled = true;
   button.textContent = '启动中...';
   try {
+    state.enforceModelMatch = false;
+    state.preferredModelPath = '';
+    state.preferredModelName = '';
     const payload = await api('/api/pid/jobs/demo/single', { method: 'POST' });
     state.activeJobId = payload.jobId;
     await refreshJob();
@@ -1125,6 +1132,9 @@ async function startDemo() {
   button.disabled = true;
   button.textContent = '启动中...';
   try {
+    state.enforceModelMatch = false;
+    state.preferredModelPath = '';
+    state.preferredModelName = '';
     const payload = await api('/api/pid/jobs/demo', { method: 'POST' });
     state.activeJobId = payload.jobId;
     await refreshJob();

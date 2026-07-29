@@ -39,13 +39,14 @@ SERVER_VERSION = "0.5.0-dev"
 MATLAB_HEALTH_CACHE = {"checkedAt": 0.0, "ready": False, "error": "正在检查 MATLAB"}
 MATLAB_HEALTH_LOCK = threading.Lock()
 MATLAB_HEALTH_PROBING = False
+MATLAB_HEALTH_TTL_SECONDS = 900
 
 
 def probe_matlab(force=False):
     now = time.time()
     with MATLAB_HEALTH_LOCK:
         cached = dict(MATLAB_HEALTH_CACHE)
-    if not force and now - cached["checkedAt"] < 60:
+    if not force and now - cached["checkedAt"] < MATLAB_HEALTH_TTL_SECONDS:
         return cached
     result = {"checkedAt": now, "ready": False, "error": ""}
     if not MATLAB.is_file():
@@ -74,7 +75,7 @@ def matlab_health_snapshot():
     global MATLAB_HEALTH_PROBING
     with MATLAB_HEALTH_LOCK:
         snapshot = dict(MATLAB_HEALTH_CACHE)
-        stale = time.time() - snapshot["checkedAt"] >= 60
+        stale = time.time() - snapshot["checkedAt"] >= MATLAB_HEALTH_TTL_SECONDS
         if stale and not MATLAB_HEALTH_PROBING:
             MATLAB_HEALTH_PROBING = True
             should_start = True
@@ -174,8 +175,10 @@ def read_status(job_id):
     run_dir = RUNS / job_id
     status = read_json(run_dir / "current_status.json")
     if isinstance(status, dict):
+        request_config = read_json(run_dir / "request_config.json") or {}
         status["jobId"] = job_id
         status["runDir"] = str(run_dir)
+        status["modelPath"] = request_config.get("modelPath", "")
         status["resultApplied"] = (run_dir / "apply_manifest.json").is_file()
         status["rollbackAvailable"] = status["resultApplied"]
     return status
@@ -518,13 +521,10 @@ def normalize_custom_payload(payload):
             "环路配置必须覆盖全部已选 PID。", "LOOP_MAPPING_INCOMPLETE", "evaluationLoops"
         )
     primary_indices = [index for index, item in enumerate(loops) if item["primary"]]
-    if len(primary_indices) > 1:
+    if len(primary_indices) != 1:
         raise RequestValidationError(
-            "只能指定一个主评价环路。", "PRIMARY_LOOP_INVALID", "evaluationLoops"
+            "必须且只能指定一个主评价环路。", "PRIMARY_LOOP_INVALID", "evaluationLoops"
         )
-    if not primary_indices:
-        preferred = next((index for index, item in enumerate(loops) if item["role"] == "outer"), 0)
-        loops[preferred]["primary"] = True
     primary = next(item for item in loops if item["primary"])
 
     strategy = str(payload.get("searchStrategy") or "auto").strip().lower()
@@ -534,11 +534,43 @@ def normalize_custom_payload(payload):
             "SEARCH_STRATEGY_INVALID", "searchStrategy"
         )
     roles = {item["role"] for item in loops}
-    if strategy in {"auto", "cascade"} and len(loops) == 2 and roles != {"inner", "outer"}:
+    has_cascade_roles = len(loops) == 2 and roles == {"inner", "outer"}
+    has_coupled_roles = len(loops) == 2 and roles == {"coupled"}
+    if strategy == "cascade" and not has_cascade_roles:
         raise RequestValidationError(
             "级联双环必须分别标记 inner 和 outer。",
             "CASCADE_ROLE_REQUIRED", "evaluationLoops"
         )
+    if strategy == "auto" and len(loops) == 2 and not (has_cascade_roles or has_coupled_roles):
+        raise RequestValidationError(
+            "自动策略下，两个 PID 必须是明确的内外环，或都标记为 coupled。",
+            "AUTO_ROLE_INCONSISTENT", "evaluationLoops"
+        )
+    if has_cascade_roles and strategy in {"auto", "cascade"}:
+        inner = next(item for item in loops if item["role"] == "inner")
+        outer = next(item for item in loops if item["role"] == "outer")
+        if not outer["primary"]:
+            raise RequestValidationError(
+                "级联双环必须将外环设为主评价环。",
+                "CASCADE_PRIMARY_OUTER_REQUIRED", "evaluationLoops"
+            )
+        if outer["controlSignalName"] != inner["referenceSignalName"]:
+            raise RequestValidationError(
+                "级联信号链不完整：外环控制输出必须与内环参考信号相同。",
+                "CASCADE_SIGNAL_CHAIN_INVALID", "evaluationLoops"
+            )
+        inner_settling = inner["targets"].get("settlingTimeMax")
+        outer_settling = outer["targets"].get("settlingTimeMax")
+        if inner_settling is None or outer_settling is None:
+            raise RequestValidationError(
+                "级联内外环都必须设置调节时间上限。",
+                "CASCADE_SETTLING_TARGET_REQUIRED", "evaluationLoops"
+            )
+        if inner_settling >= outer_settling:
+            raise RequestValidationError(
+                "级联评价目标不合理：内环调节时间上限必须小于外环。",
+                "CASCADE_TARGET_ORDER_INVALID", "evaluationLoops"
+            )
 
     return {
         "modelPath": model_path,
@@ -740,6 +772,10 @@ def inspect_model(model_path):
         result = read_json(response_file)
         if not isinstance(result, dict):
             raise RuntimeError("MATLAB 返回的模型扫描结果无效。")
+        with MATLAB_HEALTH_LOCK:
+            MATLAB_HEALTH_CACHE.update({
+                "checkedAt": time.time(), "ready": True, "error": ""
+            })
         return result
     finally:
         for path in (request_file, response_file):
