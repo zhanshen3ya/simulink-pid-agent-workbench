@@ -91,7 +91,7 @@ slUpdateToolstripComponent("pidAgent")
 
 1. 选择 `.slx` 或 `.mdl` 模型。
 2. 点击“读取模型”。
-3. 选择一个或两个 PID 控制器。
+3. 选择一个 PID，或明确选择一组已确认属于同一控制系统的两个 PID。模型含多个 PID 时不会默认选择前两个。
 4. 选择负责效果评价的主 PID。
 5. 从已记录信号中选择有效参考值、反馈输出和 PID 控制输出；需要过流保护时再选择电流信号。
 6. 可以应用程序给出的拓扑建议，但必须人工核对并勾选确认。
@@ -106,10 +106,11 @@ slUpdateToolstripComponent("pidAgent")
 判定顺序如下：
 
 1. 仿真必须成功，输出不能包含无效数值，闭环必须稳定或在规定时间内收敛。
-2. 超调量、调节时间、稳态误差、电流峰值、控制量、纹波和饱和比例等已设置指标必须全部通过。
-3. 只有通过硬指标的候选才能作为最终参数。
-4. 综合分数用于比较通过硬指标的候选，不用于掩盖任何超限项。
-5. 页面同时显示原始基线、当前候选、当前最佳和目标上限，并标出未通过的具体指标。
+2. 每个选中的 PID 都有独立评价环。超调量、调节时间、稳态误差、RMSE、电流峰值、控制量、纹波和饱和比例等已设置指标必须逐环通过。
+3. 级联双环按“内环、外环、联合微调”执行；外环阶段同时复查内环，任一环失败都会拒绝整组参数。
+4. 只有通过全部硬指标的候选才能作为最终参数。
+5. 综合分数用于比较通过硬指标的候选，不用于掩盖任何超限项。
+6. 页面同时显示原始基线、当前候选、当前最佳和目标上限，并标出未通过的具体指标。
 
 等级表示与原始 PID 的比较结果：`A` 表示明显改善或原始 PID 不合格而候选已达标，`B` 表示有改善，`C` 表示改善较小或出现退化，`D` 表示未通过硬指标。没有基线的旧任务只显示 `PASS` 或未通过。
 
@@ -162,25 +163,48 @@ result = main_pid_search(cfg);
 ```matlab
 cfg = pid_tuning_core.defaultPidTuningConfig();
 cfg.modelName = "your_model";
+cfg.search.strategy = "cascade";
 
-cfg.pidBlocks(1).name = "outer";
-cfg.pidBlocks(1).path = "your_model/Outer PID";
-cfg.pidBlocks(1).bounds.Kp = [0, 40];
-cfg.pidBlocks(1).bounds.Ki = [0, 30];
-cfg.pidBlocks(1).bounds.Kd = [0, 10];
-cfg.pidBlocks(1).bounds.N = [10, 500];
+bounds = struct("Kp", [0, 40], "Ki", [0, 30], ...
+    "Kd", [0, 0], "N", [100, 100]);
+cfg.pidBlocks = [
+    struct("name", "inner", "path", "your_model/Inner PI", "bounds", bounds), ...
+    struct("name", "outer", "path", "your_model/Outer PI", "bounds", bounds)];
 
-cfg.pidBlocks(2).name = "inner";
-cfg.pidBlocks(2).path = "your_model/Inner PID";
-cfg.pidBlocks(2).bounds.Kp = [0, 60];
-cfg.pidBlocks(2).bounds.Ki = [0, 40];
-cfg.pidBlocks(2).bounds.Kd = [0, 10];
-cfg.pidBlocks(2).bounds.N = [10, 500];
+innerTargets = cfg.targets;
+innerTargets.overshootPctMax = 15;
+innerTargets.settlingTimeMax = 0.05;
+innerTargets.maxAbsCurrentMax = 20;
+innerMetrics = cfg.metrics;
+innerMetrics.controlLowerLimit = 0;
+innerMetrics.controlUpperLimit = 1;
+
+outerTargets = cfg.targets;
+outerTargets.overshootPctMax = 10;
+outerTargets.settlingTimeMax = 0.2;
+outerTargets.steadyStateErrorAbsMax = 0.1;
+outerMetrics = cfg.metrics;
+outerMetrics.controlLowerLimit = 0;
+outerMetrics.controlUpperLimit = 20;
+
+cfg.evaluationLoops = [
+    struct("name", "current", "role", "inner", ...
+        "pidPath", "your_model/Inner PI", ...
+        "referenceSignalName", "i_ref", "outputSignalName", "i_meas", ...
+        "controlSignalName", "duty", "currentSignalName", "i_meas", ...
+        "weight", 1, "enabled", true, "primary", false, ...
+        "targets", innerTargets, "metrics", innerMetrics), ...
+    struct("name", "voltage", "role", "outer", ...
+        "pidPath", "your_model/Outer PI", ...
+        "referenceSignalName", "v_ref", "outputSignalName", "v_out", ...
+        "controlSignalName", "i_ref", "currentSignalName", "i_meas", ...
+        "weight", 1, "enabled", true, "primary", true, ...
+        "targets", outerTargets, "metrics", outerMetrics)];
 
 result = main_pid_search(cfg);
 ```
 
-两个 PID 的参数会在同一次仿真中一起测试。
+模型必须记录 `i_ref`、`i_meas`、`duty`、`v_ref` 和 `v_out`。程序先调内环，再调外环，最后联合微调；每个候选仍在同一次完整模型仿真中检查全部启用环路。
 
 ## 多 PID 管理器
 
@@ -200,13 +224,18 @@ pid_project_manager.launch("pid_ai_multi_system_demo")
 - 显示 PID 路径和当前 Kp、Ki、Kd、N。
 - 在 Simulink 中定位选中的 PID。
 - 设置 PID 的角色、组号和执行顺序。
-- 将两个 PID 设置为一组进行调参。
-- 设置停止时间、迭代次数、候选数量和信号名称。
+- 仅在信号连接证据明确时自动建立内外环组；否则由用户人工分组。
+- 为每个 PID 分别设置参考、反馈、控制、电流信号、主评价环、权重、控制上下限和评价目标。
+- 设置停止时间、迭代次数和候选数量。
 - 按顺序运行多组调参任务。
 
 每个调参组最多包含两个 PID。
 
 管理器配置保存在 `.pid-agent/`。运行记录保存在 `pid_tuning_runs/`。这两个目录不会上传到 GitHub。
+
+## 应用参数与回滚
+
+只有通过全部硬指标的候选可以写入模型。写入前程序会保存模型备份和原始 PID 参数，并核对任务开始时记录的模型 SHA-256 指纹；模型在调参后发生变化时会拒绝应用。回滚前还会再次核对应用后的指纹，避免覆盖后来保存的模型修改。
 
 ## AI 接入
 

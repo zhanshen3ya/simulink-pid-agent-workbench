@@ -6,6 +6,14 @@ if ~isfile(manifestPath)
 end
 manifest = jsondecode(fileread(manifestPath));
 [modelName, resolvedPath] = pid_tuning_core.resolveSimulinkModel(manifest.modelPath);
+if isfield(manifest, "appliedModelFingerprint") && ...
+        strlength(string(manifest.appliedModelFingerprint)) > 0
+    currentFingerprint = pid_tuning_core.fileSha256(resolvedPath);
+    if currentFingerprint ~= lower(string(manifest.appliedModelFingerprint))
+        error("PIDAgent:ModelChangedAfterApply", ...
+            "The model file changed after PID parameters were applied. Automatic rollback was stopped to protect the newer changes.");
+    end
+end
 wasLoaded = bdIsLoaded(modelName);
 load_system(resolvedPath);
 if wasLoaded && strcmpi(get_param(modelName, "Dirty"), "on")
@@ -32,5 +40,6 @@ end
 save_system(modelName, resolvedPath);
 receipt = struct("rolledBack", true, "modelPath", string(resolvedPath), ...
     "manifestPath", string(manifestPath), ...
+    "modelFingerprint", pid_tuning_core.fileSha256(resolvedPath), ...
     "rolledBackAt", string(datetime("now", "Format", "yyyy-MM-dd'T'HH:mm:ssXXX")));
 end

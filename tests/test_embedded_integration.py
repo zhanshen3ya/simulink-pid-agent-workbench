@@ -58,6 +58,16 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             self.assertEqual(normalized["projectRoot"], str(workdir.resolve()))
             self.assertEqual(normalized["projectPath"], str(project.resolve()))
 
+    def test_model_fingerprint_is_bound_to_job_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.write_bytes(b"model-v1")
+            first = server_custom.normalize_custom_payload(single_loop_payload(model))
+            self.assertEqual(len(first["modelFingerprint"]), 64)
+            model.write_bytes(b"model-v2")
+            second = server_custom.normalize_custom_payload(single_loop_payload(model))
+            self.assertNotEqual(first["modelFingerprint"], second["modelFingerprint"])
+
     def test_project_path_collection_is_optional_context(self):
         with tempfile.TemporaryDirectory() as directory:
             workdir = Path(directory)
@@ -234,6 +244,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn('id="signalMappingConfirmedInput"', html)
 
         app_js = (ROOT / "local_pid_gateway" / "web" / "app_custom.js").read_text(encoding="utf-8")
+        app_v2_js = (ROOT / "local_pid_gateway" / "web" / "app_custom_v2.js").read_text(encoding="utf-8")
         self.assertIn("renderEffectEvaluation({})", app_js)
         self.assertIn("apiViaMatlab(path, options)", app_js)
         self.assertIn("sendMatlabEvent('GatewayRequest'", app_js)
@@ -242,6 +253,9 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("availableSignalNames", app_js)
         self.assertIn("apiErrorText(error, '启动')", app_js)
         self.assertNotIn("el('currentMetrics')", app_js)
+        self.assertIn("Multi-PID models require an explicit selection", app_v2_js)
+        self.assertIn("async function startBuckDemo()", app_v2_js)
+        self.assertNotIn("/api/pid/jobs/demo/buck", app_v2_js)
 
         matlab_app = (ROOT / "+pid_agent_ui" / "PidAgentWebApp.m").read_text(encoding="utf-8")
         http_helper = (ROOT / "+pid_agent_ui" / "sendGatewayHttpRequest.m").read_text(encoding="utf-8")
@@ -249,6 +263,10 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("pid_agent_ui.sendGatewayHttpRequest", matlab_app)
         self.assertIn("performModelAction", matlab_app)
         self.assertIn("applyPidCandidateToModel", matlab_app)
+        self.assertIn("modelFingerprint", matlab_app)
+        preflight = (ROOT / "run_pid_tuning_from_json.m").read_text(encoding="utf-8")
+        self.assertIn("localValidateModelMapping", preflight)
+        self.assertIn("PIDAgent:SignalNotLogged", preflight)
         self.assertIn("matlab.net.http.RequestMessage", http_helper)
 
         server_ai_text = (ROOT / "local_pid_gateway" / "server_ai.py").read_text(encoding="utf-8")

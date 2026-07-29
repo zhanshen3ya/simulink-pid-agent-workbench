@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ MATLAB = find_matlab_executable()
 JOBS = {}
 REQUEST_LOG = ROOT / "local_pid_gateway" / "gateway_requests.jsonl"
 REQUEST_LOG_LOCK = threading.Lock()
-SERVER_VERSION = "0.4.0-dev"
+SERVER_VERSION = "0.5.0-dev"
 MATLAB_HEALTH_CACHE = {"checkedAt": 0.0, "ready": False, "error": "正在检查 MATLAB"}
 MATLAB_HEALTH_LOCK = threading.Lock()
 MATLAB_HEALTH_PROBING = False
@@ -342,6 +343,14 @@ def normalize_control_limits(source, field_prefix=""):
     return lower, upper
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def normalize_custom_payload(payload):
     if not isinstance(payload, dict):
         raise RequestValidationError("请求配置必须是 JSON 对象。")
@@ -531,6 +540,7 @@ def normalize_custom_payload(payload):
 
     return {
         "modelPath": model_path,
+        "modelFingerprint": file_sha256(model_path),
         "workingDirectory": normalize_optional_directory(payload.get("workingDirectory")),
         "projectRoot": normalize_optional_directory(payload.get("projectRoot")),
         "projectPath": normalize_project_path(payload.get("projectPath")),
@@ -796,6 +806,7 @@ def apply_job_result(job_id):
         "pidBlocks": request_config["pidBlocks"],
         "candidate": candidate,
         "runDir": str(run_dir),
+        "expectedModelFingerprint": request_config.get("modelFingerprint", ""),
     }, run_dir)
 
 

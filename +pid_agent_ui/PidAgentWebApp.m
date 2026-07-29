@@ -180,9 +180,13 @@ classdef PidAgentWebApp < handle
                         error("PIDAgent:ResultNotPassed", ...
                             "Only a result that passes every hard metric can be applied.");
                     end
+                    expectedFingerprint = "";
+                    if isfield(config, "modelFingerprint")
+                        expectedFingerprint = string(config.modelFingerprint);
+                    end
                     receipt = pid_tuning_core.applyPidCandidateToModel( ...
                         config.modelPath, config.pidBlocks, ...
-                        best.result.candidate, runDir);
+                        best.result.candidate, runDir, expectedFingerprint);
                 else
                     if ~isfile(manifestPath)
                         error("PIDAgent:RollbackUnavailable", ...

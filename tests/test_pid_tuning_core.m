@@ -76,6 +76,36 @@ metrics = pid_tuning_core.evaluatePidRun(simulation, cfg.initialCandidate, cfg);
 verifyGreaterThan(testCase, metrics.overshootPct, 10);
 end
 
+function testApplyAndRollbackRequireUnchangedModel(testCase)
+rootDir = fileparts(fileparts(mfilename("fullpath")));
+sourceModel = fullfile(rootDir, "pid_ai_second_order_demo.slx");
+workDir = string(tempname);
+mkdir(workDir);
+modelName = "pid_apply_test_" + string(randi(1e8));
+modelPath = fullfile(workDir, modelName + ".slx");
+copyfile(sourceModel, modelPath);
+cleanup = onCleanup(@() localCleanupModel(modelName, workDir)); %#ok<NASGU>
+info = pid_tuning_core.inspectPidModel(modelPath);
+verifyEqual(testCase, numel(info.pidBlocks), 1);
+block = info.pidBlocks(1);
+original = pid_tuning_core.readPidBlockParams(block.path).numeric;
+candidate = struct("pids", struct("name", "test", ...
+    "Kp", original.Kp + 0.123, "Ki", original.Ki, ...
+    "Kd", original.Kd, "N", original.N));
+expectedFingerprint = pid_tuning_core.fileSha256(modelPath);
+verifyError(testCase, @() pid_tuning_core.applyPidCandidateToModel( ...
+    modelPath, block, candidate, fullfile(workDir, "rejected"), "deadbeef"), ...
+    "PIDAgent:ModelChangedSinceTuning");
+receipt = pid_tuning_core.applyPidCandidateToModel( ...
+    modelPath, block, candidate, fullfile(workDir, "accepted"), expectedFingerprint);
+applied = pid_tuning_core.readPidBlockParams(block.path).numeric;
+verifyEqual(testCase, applied.Kp, original.Kp + 0.123, "AbsTol", 1e-12);
+rollback = pid_tuning_core.rollbackPidModel(receipt.manifestPath);
+verifyTrue(testCase, rollback.rolledBack);
+restored = pid_tuning_core.readPidBlockParams(block.path).numeric;
+verifyEqual(testCase, restored.Kp, original.Kp, "AbsTol", 1e-12);
+end
+
 function cfg = localConfig()
 cfg = pid_tuning_core.defaultPidTuningConfig();
 bounds = struct("Kp", [0, 10], "Ki", [0, 10], "Kd", [0, 1], "N", [10, 500]);
@@ -127,4 +157,12 @@ out.y = timeseries(y, t);
 out.iRef = timeseries(iRef, t);
 out.iL = timeseries(iL, t);
 out.duty = timeseries(duty, t);
+end
+function localCleanupModel(modelName, workDir)
+if bdIsLoaded(modelName)
+    close_system(modelName, 0);
+end
+if isfolder(workDir)
+    rmdir(workDir, "s");
+end
 end

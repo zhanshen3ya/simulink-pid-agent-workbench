@@ -4,8 +4,13 @@ function apply_pid_job_from_json(requestFile, responseFile)
 request = jsondecode(fileread(requestFile));
 action = lower(string(request.action));
 if action == "apply"
+    expectedFingerprint = "";
+    if isfield(request, "expectedModelFingerprint")
+        expectedFingerprint = string(request.expectedModelFingerprint);
+    end
     receipt = pid_tuning_core.applyPidCandidateToModel( ...
-        request.modelPath, request.pidBlocks, request.candidate, request.runDir);
+        request.modelPath, request.pidBlocks, request.candidate, ...
+        request.runDir, expectedFingerprint);
 elseif action == "rollback"
     receipt = pid_tuning_core.rollbackPidModel(request.manifestPath);
 else

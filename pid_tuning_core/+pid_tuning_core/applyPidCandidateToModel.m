@@ -1,7 +1,17 @@
-function receipt = applyPidCandidateToModel(modelPath, pidBlocks, candidate, runDir)
+function receipt = applyPidCandidateToModel(modelPath, pidBlocks, candidate, runDir, expectedFingerprint)
 %APPLYPIDCANDIDATETOMODEL Persist a validated candidate with rollback data.
 
+if nargin < 5
+    expectedFingerprint = "";
+end
+
 [modelName, resolvedPath] = pid_tuning_core.resolveSimulinkModel(modelPath);
+beforeFingerprint = pid_tuning_core.fileSha256(resolvedPath);
+expectedFingerprint = lower(string(expectedFingerprint));
+if strlength(expectedFingerprint) > 0 && beforeFingerprint ~= expectedFingerprint
+    error("PIDAgent:ModelChangedSinceTuning", ...
+        "The model file changed after this tuning task started. Run a new tuning task before applying parameters.");
+end
 wasLoaded = bdIsLoaded(modelName);
 load_system(resolvedPath);
 if wasLoaded && strcmpi(get_param(modelName, "Dirty"), "on")
@@ -27,10 +37,7 @@ for index = 1:numel(pidBlocks)
     if getSimulinkBlockHandle(blockPath) < 0
         error("PID block does not exist: %s", blockPath);
     end
-    linkStatus = string(get_param(blockPath, "LinkStatus"));
-    if any(linkStatus == ["resolved", "implicit"])
-        error("Linked PID block cannot be modified directly: %s", blockPath);
-    end
+
     original(index).path = blockPath;
     original(index).P = string(get_param(blockPath, "P"));
     original(index).I = string(get_param(blockPath, "I"));
@@ -69,6 +76,8 @@ manifest.appliedAt = string(datetime("now", "Format", "yyyy-MM-dd'T'HH:mm:ssXXX"
 manifest.modelName = string(modelName);
 manifest.modelPath = string(resolvedPath);
 manifest.backupPath = string(backupPath);
+manifest.beforeModelFingerprint = beforeFingerprint;
+manifest.appliedModelFingerprint = pid_tuning_core.fileSha256(resolvedPath);
 manifest.original = original;
 manifest.appliedCandidate = candidate;
 manifest.pidBlocks = pidBlocks;

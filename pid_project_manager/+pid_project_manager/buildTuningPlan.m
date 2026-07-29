@@ -83,10 +83,11 @@ end
 function localValidateMembers(members, key)
 if numel(members) == 2
     roles = lower(string({members.role}));
-    hasCascadeRole = any(roles == "inner") || any(roles == "outer");
-    if hasCascadeRole && ~all(ismember(["inner", "outer"], roles))
-        error("PIDAgent:InvalidCascadeRoles", ...
-            "Group %s must contain exactly one inner and one outer loop.", key);
+    isCascade = all(ismember(["inner", "outer"], roles));
+    isCoupled = all(roles == "coupled");
+    if ~(isCascade || isCoupled)
+        error("PIDAgent:InvalidDualLoopRoles", ...
+            "Group %s must be one inner/outer cascade pair or two explicitly coupled loops.", key);
     end
 end
 primaryCount = sum([members.primaryEvaluation]);
@@ -121,7 +122,22 @@ for index = 1:numel(members)
         item.steadyStateErrorAbsMax];
     if any(~isfinite(targets)) || any(targets < 0)
         error("PIDAgent:InvalidLoopTargets", ...
-            "PID %s evaluation targets must be finite and nonnegative.", item.name);
+            "PID %s required evaluation targets must be finite and nonnegative.", item.name);
+    end
+    optionalTargets = [item.trackingRmseMax, item.maxAbsCurrentMax, ...
+        item.outputRippleMax, item.controlSaturationFractionMax];
+    invalidOptional = ~(isnan(optionalTargets) | ...
+        (isfinite(optionalTargets) & optionalTargets >= 0));
+    if any(invalidOptional) || ...
+            (isfinite(item.controlSaturationFractionMax) && ...
+            item.controlSaturationFractionMax > 1)
+        error("PIDAgent:InvalidOptionalLoopTargets", ...
+            "PID %s optional targets must be NaN or valid nonnegative limits.", item.name);
+    end
+    if isfinite(item.maxAbsCurrentMax) && ...
+            strlength(string(item.currentSignalName)) == 0
+        error("PIDAgent:MissingCurrentSignal", ...
+            "PID %s has a current limit but no current signal.", item.name);
     end
 end
 end
@@ -139,6 +155,14 @@ for index = 1:numel(members)
         "settlingTimeMax", item.settlingTimeMax, ...
         "steadyStateErrorAbsMax", item.steadyStateErrorAbsMax, ...
         "maxAbsControlMax", max(abs([item.controlLowerLimit, item.controlUpperLimit])));
+    optionalNames = ["trackingRmseMax", "maxAbsCurrentMax", ...
+        "outputRippleMax", "controlSaturationFractionMax"];
+    for optionalName = optionalNames
+        optionalValue = double(item.(optionalName));
+        if isfinite(optionalValue)
+            targets.(optionalName) = optionalValue;
+        end
+    end
     loops(index) = struct("name", string(item.name) + " loop", ...
         "role", string(item.role), "pidPath", string(item.path), ...
         "referenceSignalName", string(item.referenceSignalName), ...

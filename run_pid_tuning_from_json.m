@@ -35,7 +35,13 @@ if isfield(raw, "workingDirectory") && isfolder(string(raw.workingDirectory))
 end
 
 modelPath = string(raw.modelPath);
-[modelName, ~, modelDir] = pid_tuning_core.resolveSimulinkModel(modelPath);
+[modelName, resolvedPath, modelDir] = pid_tuning_core.resolveSimulinkModel(modelPath);
+if isfield(raw, "modelFingerprint") && strlength(string(raw.modelFingerprint)) > 0
+    if pid_tuning_core.fileSha256(resolvedPath) ~= lower(string(raw.modelFingerprint))
+        error("PIDAgent:ModelChangedBeforeTuning", ...
+            "The model file changed after the task was configured. Scan the model again before tuning.");
+    end
+end
 if strlength(modelDir) > 0
     addpath(modelDir);
     cd(modelDir);
@@ -96,7 +102,46 @@ if cfg.metrics.controlLowerLimit >= cfg.metrics.controlUpperLimit
     error("controlLowerLimit must be smaller than controlUpperLimit.");
 end
 
+pid_tuning_core.normalizeEvaluationLoops(cfg);
+localValidateModelMapping(cfg, resolvedPath);
 result = main_pid_search(cfg);
+end
+
+function localValidateModelMapping(cfg, modelPath)
+info = pid_tuning_core.inspectPidModel(modelPath);
+actualPidPaths = string({info.pidBlocks.path});
+requestedPidPaths = string({cfg.pidBlocks.path});
+missingPidPaths = requestedPidPaths(~ismember(requestedPidPaths, actualPidPaths));
+if ~isempty(missingPidPaths)
+    error("PIDAgent:PidBlockNotFound", ...
+        "Selected PID block was not found in the current model: %s", ...
+        strjoin(missingPidPaths, ", "));
+end
+loops = pid_tuning_core.normalizeEvaluationLoops(cfg);
+requiredSignals = strings(0, 1);
+for index = 1:numel(loops)
+    if ~loops(index).enabled
+        continue;
+    end
+    names = [loops(index).referenceSignalName, loops(index).outputSignalName, ...
+        loops(index).controlSignalName, loops(index).currentSignalName];
+    requiredSignals = [requiredSignals; names(strlength(names) > 0).']; %#ok<AGROW>
+end
+requiredSignals = unique(requiredSignals, "stable");
+duplicateSignals = string(info.duplicateLoggedSignalNames);
+ambiguous = requiredSignals(ismember(requiredSignals, duplicateSignals));
+if ~isempty(ambiguous)
+    error("PIDAgent:AmbiguousLoggedSignal", ...
+        "Evaluation signal names are duplicated in the model: %s", ...
+        strjoin(ambiguous, ", "));
+end
+actualSignals = string(info.loggedSignals);
+missingSignals = requiredSignals(~ismember(requiredSignals, actualSignals));
+if ~isempty(missingSignals)
+    error("PIDAgent:SignalNotLogged", ...
+        "Evaluation signals are not logged by the current model: %s", ...
+        strjoin(missingSignals, ", "));
+end
 end
 
 function blocks = localPidBlocks(input)
