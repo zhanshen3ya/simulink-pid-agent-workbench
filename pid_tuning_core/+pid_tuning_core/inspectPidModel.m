@@ -9,10 +9,11 @@ blocks = localFindAllVariants(modelName, "Type", "Block");
 emptyPid = struct("name", "", "path", "", "blockType", "", ...
     "maskType", "", "referenceBlock", "", "currentPid", ...
     struct("Kp", 0, "Ki", 0, "Kd", 0, "N", 100), ...
-    "signalSuggestion", localEmptySignalSuggestion());
+    "signalSuggestion", localEmptySignalSuggestion(), ...
+    "suggestedRole", "", "tuningOrder", NaN, "cascadePartnerPath", "");
 pidBlocks = repmat(emptyPid, 0, 1);
 
-loggedSignals = localLoggedSignals(modelName);
+[loggedSignals, signalCatalog, duplicateSignalNames] = localLoggedSignals(modelName);
 for idx = 1:numel(blocks)
     blockPath = blocks{idx};
     blockType = string(localGetParam(blockPath, "BlockType"));
@@ -40,12 +41,17 @@ for idx = 1:numel(blocks)
     pidBlocks(end + 1, 1) = item; %#ok<AGROW>
 end
 
+[pidBlocks, cascadePairs] = localAnnotateCascade(pidBlocks);
+
 info = struct();
 info.modelName = string(modelName);
 info.modelPath = string(resolvedPath);
 info.pidBlocks = pidBlocks;
 info.loggedSignals = loggedSignals;
+info.loggedSignalCatalog = signalCatalog;
+info.duplicateLoggedSignalNames = duplicateSignalNames;
 info.pidCount = numel(pidBlocks);
+info.cascadePairs = cascadePairs;
 end
 
 function suggestion = localEmptySignalSuggestion()
@@ -210,6 +216,40 @@ try
     end
 catch
 end
+if strlength(name) == 0
+    name = localDownstreamLoggedName(lineHandle);
+end
+end
+
+function name = localDownstreamLoggedName(lineHandle)
+name = "";
+transparentTypes = ["saturation", "deadzone", "ratetransition", ...
+    "datatypeconversion", "signalconversion"];
+try
+    destinationPorts = get_param(lineHandle, "DstPortHandle");
+catch
+    return;
+end
+for portIndex = 1:numel(destinationPorts)
+    try
+        destinationBlock = string(get_param(destinationPorts(portIndex), "Parent"));
+        blockType = lower(string(get_param(destinationBlock, "BlockType")));
+        if ~any(blockType == transparentTypes)
+            continue;
+        end
+        handles = get_param(destinationBlock, "PortHandles");
+        for outputIndex = 1:numel(handles.Outport)
+            outputLine = get_param(handles.Outport(outputIndex), "Line");
+            if isnumeric(outputLine) && outputLine > 0
+                name = localLineName(outputLine);
+                if strlength(name) > 0
+                    return;
+                end
+            end
+        end
+    catch
+    end
+end
 end
 
 function value = localGetParam(blockPath, parameter)
@@ -234,8 +274,58 @@ if isempty(params)
 end
 end
 
-function names = localLoggedSignals(modelName)
-names = strings(0, 1);
+function [blocks, pairs] = localAnnotateCascade(blocks)
+pairTemplate = struct("outerPath", "", "innerPath", "", ...
+    "confidence", 0, "evidence", "");
+pairs = repmat(pairTemplate, 0, 1);
+for outerIndex = 1:numel(blocks)
+    outerControl = string(blocks(outerIndex).signalSuggestion.controlSignalName);
+    if strlength(outerControl) == 0
+        continue;
+    end
+    for innerIndex = 1:numel(blocks)
+        if outerIndex == innerIndex
+            continue;
+        end
+        innerReference = string(blocks(innerIndex).signalSuggestion.referenceSignalName);
+        if strlength(innerReference) == 0 || outerControl ~= innerReference
+            continue;
+        end
+        blocks(outerIndex).suggestedRole = "outer";
+        blocks(outerIndex).tuningOrder = 2;
+        blocks(outerIndex).cascadePartnerPath = blocks(innerIndex).path;
+        blocks(innerIndex).suggestedRole = "inner";
+        blocks(innerIndex).tuningOrder = 1;
+        blocks(innerIndex).cascadePartnerPath = blocks(outerIndex).path;
+        pair = pairTemplate;
+        pair.outerPath = blocks(outerIndex).path;
+        pair.innerPath = blocks(innerIndex).path;
+        pair.confidence = min(blocks(outerIndex).signalSuggestion.confidence, ...
+            blocks(innerIndex).signalSuggestion.confidence);
+        pair.evidence = "Outer PID control signal feeds the inner PID reference.";
+        pairs(end + 1, 1) = pair; %#ok<AGROW>
+    end
+end
+if ~isempty(pairs)
+    return;
+end
+
+% Name evidence is only a fallback and never marks a pair as high confidence.
+for index = 1:numel(blocks)
+    descriptor = lower(string(blocks(index).name) + " " + string(blocks(index).path));
+    if any(contains(descriptor, ["inner", "current", "电流"]))
+        blocks(index).suggestedRole = "inner";
+        blocks(index).tuningOrder = 1;
+    elseif any(contains(descriptor, ["outer", "voltage", "position", "电压", "外环"]))
+        blocks(index).suggestedRole = "outer";
+        blocks(index).tuningOrder = 2;
+    end
+end
+end
+function [names, catalog, duplicateNames] = localLoggedSignals(modelName)
+entryTemplate = struct("name", "", "storage", "", "sourcePath", "", ...
+    "sourcePort", NaN, "selector", "");
+catalog = repmat(entryTemplate, 0, 1);
 lineHandles = localFindAllVariants(modelName, "FindAll", "on", "Type", "line");
 for idx = 1:numel(lineHandles)
     try
@@ -243,9 +333,16 @@ for idx = 1:numel(lineHandles)
             continue;
         end
         signalName = string(get_param(lineHandles(idx), "Name"));
-        if strlength(signalName) > 0
-            names(end + 1, 1) = signalName; %#ok<AGROW>
+        if strlength(signalName) == 0
+            continue;
         end
+        item = entryTemplate;
+        item.name = signalName;
+        item.storage = "logsout";
+        item.sourcePath = localLineSourcePath(lineHandles(idx));
+        item.sourcePort = localLineSourcePort(lineHandles(idx));
+        item.selector = "logsout:" + signalName;
+        catalog(end + 1, 1) = item; %#ok<AGROW>
     catch
     end
 end
@@ -253,14 +350,69 @@ workspaceBlocks = localFindAllVariants(modelName, "BlockType", "ToWorkspace");
 for idx = 1:numel(workspaceBlocks)
     try
         variableName = string(get_param(workspaceBlocks{idx}, "VariableName"));
-        if strlength(variableName) > 0
-            names(end + 1, 1) = variableName; %#ok<AGROW>
+        if strlength(variableName) == 0
+            continue;
         end
+        item = entryTemplate;
+        item.name = variableName;
+        item.storage = "workspace";
+        item.sourcePath = localWorkspaceSourcePath(workspaceBlocks{idx});
+        item.sourcePort = localWorkspaceSourcePort(workspaceBlocks{idx});
+        item.selector = "workspace:" + variableName;
+        catalog(end + 1, 1) = item; %#ok<AGROW>
     catch
     end
 end
-names = unique(names, "stable");
+allNames = string({catalog.name}).';
+names = unique(allNames, "stable");
+duplicateNames = strings(0, 1);
+for idx = 1:numel(names)
+    if sum(allNames == names(idx)) > 1
+        duplicateNames(end + 1, 1) = names(idx); %#ok<AGROW>
+    end
 end
+end
+
+function path = localLineSourcePath(lineHandle)
+path = "";
+sourceHandle = get_param(lineHandle, "SrcBlockHandle");
+if isnumeric(sourceHandle) && sourceHandle > 0
+    path = string(getfullname(sourceHandle));
+end
+end
+
+function port = localLineSourcePort(lineHandle)
+port = NaN;
+portHandle = get_param(lineHandle, "SrcPortHandle");
+if isnumeric(portHandle) && portHandle > 0
+    port = double(get_param(portHandle, "PortNumber"));
+end
+end
+
+function path = localWorkspaceSourcePath(blockPath)
+path = "";
+portHandles = get_param(blockPath, "PortHandles");
+if isempty(portHandles.Inport)
+    return;
+end
+lineHandle = get_param(portHandles.Inport(1), "Line");
+if isnumeric(lineHandle) && lineHandle > 0
+    path = localLineSourcePath(lineHandle);
+end
+end
+
+function port = localWorkspaceSourcePort(blockPath)
+port = NaN;
+portHandles = get_param(blockPath, "PortHandles");
+if isempty(portHandles.Inport)
+    return;
+end
+lineHandle = get_param(portHandles.Inport(1), "Line");
+if isnumeric(lineHandle) && lineHandle > 0
+    port = localLineSourcePort(lineHandle);
+end
+end
+
 function matches = localFindAllVariants(modelName, varargin)
 commonArguments = {"LookUnderMasks", "all", "FollowLinks", "on"};
 try

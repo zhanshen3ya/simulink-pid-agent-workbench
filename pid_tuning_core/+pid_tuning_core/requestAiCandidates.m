@@ -44,6 +44,13 @@ request.iteration = state.iteration;
 request.searchScale = state.searchScale;
 request.searchCenter = pid_tuning_core.normalizePidCandidate(state.searchCenter, cfg);
 request.targets = cfg.targets;
+request.evaluationLoops = pid_tuning_core.jsonSafe( ...
+    pid_tuning_core.normalizeEvaluationLoops(cfg));
+request.activePidIndices = localField(cfg, "activePidIndices", 1:numel(cfg.pidBlocks));
+request.stage = string(localField(state, "currentStage", "joint"));
+request.stageIteration = localField(state, "stageIteration", state.iteration);
+request.guidance = "Respect loop roles. Tune inner bandwidth before outer response; " + ...
+    "do not change inactive PID entries. Use per-loop failures and normalized metrics.";
 
 template = struct("name", "", "path", "", "bounds", struct());
 request.pidBlocks = cell(numel(cfg.pidBlocks), 1);
@@ -57,11 +64,18 @@ end
 
 request.history = localHistory(state, cfg.ai.maxHistoryRecords);
 request.responseContract = struct( ...
-    "description", "Return JSON only. Every candidate must include one pids item per pidBlocks item.", ...
+    "description", "Return JSON only. Include every PID; inactive PID values must equal searchCenter. Use per-loop metrics and stage context.", ...
     "example", struct("candidates", struct("pids", struct( ...
         "name", "pid1", "Kp", 1, "Ki", 0, "Kd", 0, "N", 100))));
 end
 
+function value = localField(source, name, fallback)
+if isstruct(source) && isfield(source, name)
+    value = source.(name);
+else
+    value = fallback;
+end
+end
 function history = localHistory(state, maxRecords)
 history = struct([]);
 if ~isfield(state, "history") || isempty(state.history) || maxRecords <= 0
@@ -75,6 +89,8 @@ template = struct("iteration", 0, "candidate", struct(), "metrics", struct(), ..
 history = repmat(template, numel(records), 1);
 for idx = 1:numel(records)
     history(idx).iteration = records(idx).iteration;
+    history(idx).stage = string(localField(records(idx), "stage", ""));
+    history(idx).stageIteration = localField(records(idx), "stageIteration", 0);
     history(idx).candidate = records(idx).candidate;
     history(idx).metrics = records(idx).metrics;
     history(idx).passed = records(idx).passed;

@@ -14,6 +14,7 @@ cfg.referenceSignalName = "r";
 cfg.outputSignalName = "y";
 cfg.controlSignalName = "u";
 cfg.currentSignalName = "";
+cfg.evaluationLoops = struct([]);
 
 cfg.randomSeed = 1;
 cfg.maxIterations = 20;
@@ -38,6 +39,10 @@ cfg.search.minScale = 0.03;
 cfg.search.scaleDecay = 0.82;
 cfg.search.eliteCount = 4;
 cfg.search.randomFraction = 0.35;
+cfg.search.strategy = "auto";
+cfg.search.jointRefineFraction = 0.20;
+cfg.search.innerStageFraction = 0.40;
+cfg.search.outerStageFraction = 0.40;
 
 rootDir = fileparts(fileparts(fileparts(mfilename("fullpath"))));
 cfg.ai = struct();
@@ -67,7 +72,11 @@ cfg.metrics.tailFraction = 0.1;
 cfg.metrics.maxAbsOutput = 1e6;
 cfg.metrics.maxAbsErrorForStable = 1e6;
 cfg.metrics.controlUpperLimit = inf;
+cfg.metrics.controlLowerLimit = -inf;
 cfg.metrics.controlSaturationTolerance = 1e-3;
+cfg.metrics.responseStartTime = NaN;
+cfg.metrics.minimumSegmentSamples = 5;
+cfg.metrics.referenceChangeTolerance = 1e-6;
 
 cfg.targets = struct();
 cfg.targets.overshootPctMax = 10;
@@ -81,6 +90,8 @@ cfg.targets.controlEnergyMax = inf;
 cfg.targets.maxAbsCurrentMax = inf;
 cfg.targets.outputRippleMax = inf;
 cfg.targets.controlSaturationFractionMax = inf;
+cfg.targets.trackingRmseMax = inf;
+cfg.targets.disturbancePeakMax = inf;
 
 cfg.weights = struct();
 cfg.weights.iae = 1.0;
@@ -94,6 +105,8 @@ cfg.weights.maxAbsControl = 0.01;
 cfg.weights.maxAbsCurrent = 0.01;
 cfg.weights.outputRipple = 1.0;
 cfg.weights.controlSaturationFraction = 1.0;
+cfg.weights.trackingRmse = 0.5;
+cfg.weights.disturbancePeak = 0.2;
 cfg.weights.failurePenalty = 1e6;
 
 cfg.logging = struct();

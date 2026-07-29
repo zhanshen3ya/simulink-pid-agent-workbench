@@ -3,274 +3,201 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PID 调参控制台</title>
+  <title>PID Agent</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./styles_custom.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">PID</div>
-        <div><h1>调参控制台</h1><p id="connectionState">未连接</p></div>
-      </div>
-      <nav class="nav-list">
-        <button class="nav-item active" data-view="run">模型与运行</button>
-        <button class="nav-item" data-view="history">历史记录</button>
-        <button class="nav-item" data-view="result">最终结果</button>
-      </nav>
-      <div class="sidebar-actions">
-        <button id="refreshButton" class="secondary-button">刷新</button>
-        <button id="startSingleDemoButton" class="secondary-button">运行单 PID Demo</button>
-        <button id="startDemoButton" class="secondary-button">运行双 PID Demo</button>
-        <button id="startBuckDemoButton" class="primary-button">Buck 双环电路 Demo</button>
-      </div>
-    </aside>
+  <div class="matlab-window">
+    <header class="title-strip">
+      <div class="app-title"><span class="app-icon">P</span><strong>PID Agent</strong><span id="connectionState">正在连接本地服务</span></div>
+      <div class="title-actions"><span id="serverVersion">--</span><span class="status-pill" id="statusPill">idle</span></div>
+    </header>
 
-    <main class="main">
-      <header class="topbar">
-        <div><h2 id="jobTitle">选择模型开始</h2><p id="jobSubtitle">本地 MATLAB / Simulink</p></div>
-        <div class="status-pill" id="statusPill">idle</div>
-      </header>
+    <div class="toolstrip">
+      <div class="tool-group">
+        <button id="selectModelButton">打开模型</button>
+        <button id="discoverModelButton">读取模型</button>
+        <button id="syncSimulinkButton" class="hidden" type="button">同步当前模型</button>
+      </div>
+      <div class="tool-separator"></div>
+      <div class="tool-group">
+        <button id="refreshButton">刷新</button>
+        <button id="openAiConfigButton" type="button">AI 设置</button>
+        <button id="startCustomButton" class="primary-button">开始调参</button>
+      </div>
+      <div class="tool-separator"></div>
+      <div class="tool-group demo-tools">
+        <button id="startSingleDemoButton">单环示例</button>
+        <button id="startDemoButton">级联示例</button>
+        <button id="startBuckDemoButton">Buck 示例</button>
+      </div>
+    </div>
 
+    <nav class="document-tabs">
+      <button class="nav-item active" data-view="run">模型与调参</button>
+      <button class="nav-item" data-view="history">任务历史</button>
+      <button class="nav-item" data-view="result">最终结果</button>
+    </nav>
+
+    <main class="workspace">
       <section class="view active" id="view-run">
-        <section class="panel full-width model-config">
-          <div class="panel-title">
-            <h3>Simulink 模型</h3>
-            <span id="modelScanState">尚未读取</span>
+        <div class="workspace-header">
+          <div><h1 id="jobTitle">尚未开始任务</h1><p id="jobSubtitle">选择当前 Simulink 模型并配置控制环路</p></div>
+          <div class="run-counters">
+            <span>阶段 <strong id="stageText">--</strong></span>
+            <span>时间 <strong id="elapsedTime">00:00:00</strong></span>
+            <span>轮次 <strong id="iterationText">0 / 0</strong></span>
+            <span>仿真 <strong id="testedText">0</strong></span>
+            <span>通过 <strong id="passedText">0</strong></span>
           </div>
+        </div>
+
+        <section class="pane model-config">
+          <div class="pane-title"><h2>模型配置</h2><span id="modelScanState">尚未读取</span></div>
           <div class="model-picker-row">
-            <input id="modelPathInput" type="text" placeholder="D:\项目\控制模型.slx" />
-            <button id="selectModelButton" class="outline-button">选择文件</button>
-            <button id="discoverModelButton" class="secondary-action-button">读取模型</button>
-            <button id="syncSimulinkButton" class="outline-button hidden" type="button">同步当前模型</button>
+            <label class="grow"><span>模型文件</span><input id="modelPathInput" type="text" placeholder="D:\project\controller.slx" /></label>
           </div>
           <div id="modelConfigBody" class="config-body hidden">
-            <div class="config-section">
-              <div class="subsection-title"><h4>选择 PID</h4><span>最多选择两个，内外环可同时调节</span></div>
+            <div class="subpane">
+              <div class="subpane-title"><h3>PID 控制器</h3><span>选择一个单环 PID，或选择构成同一控制系统的两个 PID</span></div>
               <div class="table-scroll compact">
-                <table class="discovery-table">
-                  <thead><tr><th>调节</th><th>控制器</th><th>块路径</th><th>当前 Kp</th><th>当前 Ki</th><th>当前 Kd</th><th>当前 N</th><th>定位</th></tr></thead>
+                <table class="data-table discovery-table">
+                  <thead><tr><th>选择</th><th>角色建议</th><th>控制器</th><th>块路径</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th><th></th></tr></thead>
                   <tbody id="discoveredPidRows"></tbody>
                 </table>
               </div>
             </div>
 
-            <div class="config-section">
-              <div class="subsection-title"><h4>参数搜索范围</h4><span>每个参数填写最小值和最大值</span></div>
+            <div class="subpane">
+              <div class="subpane-title"><h3>参数范围</h3><span>范围用于程序和 AI 候选生成</span></div>
               <div id="pidEditors" class="pid-editors"></div>
             </div>
 
-            <div class="config-section signal-mapping-section">
-              <div class="subsection-title">
-                <h4>效果评估信号</h4>
-                <span>程序提供拓扑建议，最终映射由用户确认</span>
-              </div>
-              <div class="signal-mapping-toolbar">
-                <label>
-                  <span>主评价 PID</span>
-                  <select id="evaluationPidSelect"></select>
+            <div class="subpane loop-pane">
+              <div class="subpane-title">
+                <h3>控制环路与评价信号</h3>
+                <label class="inline-field"><span>调参策略</span>
+                  <select id="searchStrategyInput"><option value="auto">自动识别</option><option value="cascade">内环 → 外环 → 联合微调</option><option value="joint">联合调节</option></select>
                 </label>
-                <button id="applySignalSuggestionButton" class="outline-button" type="button">应用拓扑建议</button>
               </div>
-              <div class="signal-mapping-grid">
-                <label><span>有效参考值</span><select id="referenceSignalInput"></select></label>
-                <label><span>反馈 / 被控输出</span><select id="outputSignalInput"></select></label>
-                <label><span>PID 控制输出</span><select id="controlSignalInput"></select></label>
-                <label><span>电流保护信号（可选）</span><select id="currentSignalInput"></select></label>
+              <div id="loopConfigRows" class="loop-config-list"></div>
+              <label class="check-control confirmation-row"><input id="signalMappingConfirmedInput" type="checkbox" /> 我已核对全部环路的参考、反馈、控制量和安全限制</label>
+              <div class="hidden legacy-signal-fields" aria-hidden="true">
+                <select id="evaluationPidSelect"></select><select id="referenceSignalInput"></select>
+                <select id="outputSignalInput"></select><select id="controlSignalInput"></select>
+                <select id="currentSignalInput"></select><div id="signalMappingPreview"></div>
+                <button id="applySignalSuggestionButton" type="button">应用建议</button>
               </div>
-              <div id="signalMappingPreview" class="signal-mapping-preview"></div>
-              <label class="check-control signal-confirmation">
-                <input id="signalMappingConfirmedInput" type="checkbox" />
-                我已核对参考、反馈和控制信号对应当前控制环
-              </label>
             </div>
 
-            <div class="config-section settings-grid">
-              <label><span>停止时间 (s)</span><input id="stopTimeInput" type="number" value="10" min="0.001" step="any" /></label>
-              <label><span>迭代轮数</span><input id="maxIterationsInput" type="number" value="20" min="1" step="1" /></label>
-              <label><span>每轮候选数</span><input id="numCandidatesInput" type="number" value="16" min="1" step="1" /></label>
-              <label><span>最大超调 (%)</span><input id="overshootTargetInput" type="number" value="10" min="0" step="any" /></label>
-              <label><span>最大调节时间 (s)</span><input id="settlingTargetInput" type="number" value="5" min="0" step="any" /></label>
-              <label><span>最大稳态误差</span><input id="errorTargetInput" type="number" value="0.02" min="0" step="any" /></label>
-            </div>
-            <div class="config-section ai-config-section">
-              <div class="subsection-title"><h4>AI 参数生成</h4><span>所有 AI 候选仍须通过 Simulink 和固定指标</span></div>
-              <div class="ai-inline-bar">
-                <span id="aiSummaryText">未启用 AI</span>
-                <button id="openAiConfigButton" class="outline-button" type="button">⚙ 配置 AI</button>
+            <div class="subpane">
+              <div class="subpane-title"><h3>运行设置</h3><span>所有候选均经过完整 Simulink 仿真</span></div>
+              <div class="settings-grid">
+                <label><span>停止时间 (s)</span><input id="stopTimeInput" type="number" value="10" min="0.001" step="any" /></label>
+                <label><span>总迭代轮数</span><input id="maxIterationsInput" type="number" value="20" min="3" step="1" /></label>
+                <label><span>每轮候选数</span><input id="numCandidatesInput" type="number" value="16" min="2" step="1" /></label>
+                <label><span>默认最大超调 (%)</span><input id="overshootTargetInput" type="number" value="10" min="0" step="any" /></label>
+                <label><span>默认最大调节时间 (s)</span><input id="settlingTargetInput" type="number" value="5" min="0" step="any" /></label>
+                <label><span>默认最大稳态误差</span><input id="errorTargetInput" type="number" value="0.02" min="0" step="any" /></label>
               </div>
-              <div class="settings-grid ai-mode-row">
-                <label><span>AI 每轮候选数</span><input id="aiCandidateCountInput" type="number" value="4" min="0" step="1" /></label>
-                <label class="check-control ai-strict"><input id="aiFailOnErrorInput" type="checkbox" /> AI 失败时终止任务</label>
+              <div class="run-options">
+                <label class="check-control"><input id="stopOnFirstPassInput" type="checkbox" /> 每个阶段首次通过后进入下一阶段</label>
+                <span id="aiSummaryText">程序搜索</span>
+                <label><span>AI 每轮候选</span><input id="aiCandidateCountInput" type="number" value="4" min="0" step="1" /></label>
+                <label class="check-control"><input id="aiFailOnErrorInput" type="checkbox" /> AI 失败时终止</label>
               </div>
-              <!-- hidden form fields synced from modal -->
-              <input type="hidden" id="aiModeSelect" value="none" />
-              <input type="hidden" id="aiBaseUrlInput" value="" />
-              <input type="hidden" id="aiModelInput" value="" />
-              <input type="hidden" id="aiApiKeyInput" value="" />
-              <input type="hidden" id="aiTemperatureInput" value="0.25" />
-              <input type="hidden" id="aiApiTimeoutInput" value="120" />
-              <input type="hidden" id="agentTypeInput" value="codex" />
-              <input type="hidden" id="agentExecutableInput" value="" />
-              <input type="hidden" id="agentModelInput" value="" />
-              <input type="hidden" id="agentNameInput" value="mavis" />
-              <input type="hidden" id="agentTimeoutInput" value="180" />
-            </div>
-            <div class="config-actions">
-              <label class="check-control"><input id="stopOnFirstPassInput" type="checkbox" /> 首次通过后停止</label>
-              <button id="startCustomButton" class="primary-button">启动当前模型调参</button>
             </div>
           </div>
         </section>
 
-        <div class="metric-grid">
-          <section class="metric-tile"><span>已运行时间</span><strong id="elapsedTime">00:00:00</strong></section>
-          <section class="metric-tile"><span>当前轮次</span><strong id="iterationText">0 / 0</strong></section>
-          <section class="metric-tile"><span>已测试次数</span><strong id="testedText">0</strong></section>
-          <section class="metric-tile"><span>通过次数</span><strong id="passedText">0</strong></section>
-        </div>
-
-        <div class="content-grid effect-overview-grid">
-          <section class="panel">
-            <div class="panel-title"><h3>当前参数</h3><span id="currentSummary">暂无</span></div>
-            <div class="pid-table-wrap"><table class="pid-table"><thead><tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr></thead><tbody id="currentPidRows"></tbody></table></div>
+        <div class="split-layout">
+          <section class="pane">
+            <div class="pane-title"><h2>当前候选参数</h2><span id="currentSummary">暂无</span></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr></thead><tbody id="currentPidRows"></tbody></table></div>
           </section>
-          <section class="panel effect-summary-panel">
-            <div class="panel-title"><h3>调参判定</h3><span id="currentPass">尚未评估</span></div>
-            <div class="effect-verdict" id="effectVerdict">
-              <div class="verdict-grade" id="effectGrade">--</div>
-              <div class="verdict-copy">
-                <strong id="effectVerdictTitle">等待仿真结果</strong>
-                <span id="effectVerdictDetail">完成基线和候选仿真后给出结论</span>
-              </div>
-            </div>
-            <div class="gate-list" id="effectGateList"><span class="gate-chip neutral">尚无硬指标结果</span></div>
+          <section class="pane">
+            <div class="pane-title"><h2>当前判定</h2><span id="currentPass">尚未评估</span></div>
+            <div class="verdict-row" id="effectVerdict"><strong id="effectGrade">--</strong><div><b id="effectVerdictTitle">等待仿真结果</b><span id="effectVerdictDetail">--</span></div></div>
+            <div class="gate-list" id="effectGateList"></div>
           </section>
         </div>
 
-        <section class="panel full-width effect-comparison-panel">
-          <div class="panel-title"><h3>效果对比</h3><span id="effectComparisonSummary">原始 PID 与候选结果</span></div>
-          <div class="table-scroll effect-table-scroll">
-            <table class="effect-table">
-              <thead><tr><th>指标</th><th>原始基线</th><th>当前候选</th><th>当前最佳</th><th>目标上限</th><th>当前判定</th></tr></thead>
-              <tbody id="effectComparisonRows"><tr><td colspan="6">等待仿真结果</td></tr></tbody>
-            </table>
-          </div>
+        <section class="pane">
+          <div class="pane-title"><h2>分环评价</h2><span id="effectComparisonSummary">基线、当前候选和当前最佳</span></div>
+          <div class="table-scroll"><table class="data-table effect-table"><thead><tr><th>环路</th><th>角色</th><th>判定</th><th>超调 (%)</th><th>调节时间</th><th>稳态误差</th><th>RMSE</th><th>电流峰值</th><th>纹波</th><th>饱和率</th></tr></thead><tbody id="loopMetricRows"><tr><td colspan="10">暂无结果</td></tr></tbody></table></div>
+          <div class="hidden"><table><tbody id="effectComparisonRows"></tbody></table></div>
         </section>
 
-        <section class="panel full-width">
-          <div class="panel-title"><h3>最近候选</h3><span>自动保留最近 10 条</span></div>
-          <div class="table-scroll"><table class="history-table"><thead><tr><th>#</th><th>轮次</th><th>候选</th><th>来源</th><th>通过</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>分数</th></tr></thead><tbody id="recentRows"></tbody></table></div>
+        <section class="pane trend-pane">
+          <div class="pane-title"><h2>搜索趋势</h2><span>候选分数，越低越好</span></div>
+          <canvas id="scoreTrendCanvas" height="180"></canvas>
+        </section>
+
+        <section class="pane">
+          <div class="pane-title"><h2>最近候选</h2><span>当前阶段</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>#</th><th>阶段</th><th>轮次</th><th>候选</th><th>来源</th><th>判定</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>分数</th></tr></thead><tbody id="recentRows"></tbody></table></div>
         </section>
       </section>
 
       <section class="view" id="view-history">
-        <section class="panel full-width stretch">
-          <div class="panel-title"><h3>全部历史记录</h3><span id="historyCount">0 条</span></div>
-          <div class="table-scroll large"><table class="history-table"><thead><tr><th>#</th><th>时间</th><th>轮次</th><th>候选</th><th>来源</th><th>PID 参数</th><th>通过</th><th>失败原因</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>IAE</th><th>分数</th></tr></thead><tbody id="historyRows"></tbody></table></div>
+        <section class="pane stretch">
+          <div class="pane-title history-toolbar">
+            <h2>任务历史</h2>
+            <label><span>任务</span><select id="jobSelectInput"></select></label>
+            <button id="refreshHistoryButton" type="button">刷新</button>
+            <span id="historyCount">0 条</span>
+          </div>
+          <div class="table-scroll large"><table class="data-table"><thead><tr><th>#</th><th>时间</th><th>阶段</th><th>轮次</th><th>候选</th><th>来源</th><th>PID 参数</th><th>判定</th><th>失败原因</th><th>超调</th><th>调节时间</th><th>稳态误差</th><th>分数</th></tr></thead><tbody id="historyRows"></tbody></table></div>
         </section>
       </section>
 
       <section class="view" id="view-result">
-        <div class="content-grid">
-          <section class="panel"><div class="panel-title"><h3>当前最优</h3><span id="bestKind">暂无</span></div><div class="pid-table-wrap"><table class="pid-table"><thead><tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr></thead><tbody id="bestPidRows"></tbody></table></div></section>
-          <section class="panel"><div class="panel-title"><h3>最优效果</h3><span id="bestScore">暂无</span></div><div class="metrics-list" id="bestMetrics"></div></section>
-        </div>
+        <section class="pane">
+          <div class="pane-title"><h2>最终参数</h2><span id="bestKind">暂无</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>PID</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th></tr></thead><tbody id="bestPidRows"></tbody></table></div>
+          <div class="result-actions">
+            <button id="applyBestButton" class="primary-button" type="button" disabled>写入当前模型</button>
+            <button id="rollbackBestButton" type="button">回滚模型参数</button>
+            <span id="applyState">只有通过全部硬指标的结果可以写入</span>
+          </div>
+        </section>
+        <section class="pane"><div class="pane-title"><h2>最终评价</h2><span id="bestScore">暂无</span></div><div class="metrics-list" id="bestMetrics"></div></section>
       </section>
     </main>
+    <footer class="status-bar"><span id="footerStatus">PID Agent 就绪</span><span>本地 MATLAB / Simulink</span></footer>
   </div>
-  <button id="aiFabButton" title="AI 配置">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-    </svg>
-  </button>
 
-  <div id="aiModalBackdrop" class="hidden">
-    <div class="ai-modal" role="dialog" aria-modal="true" aria-label="AI 配置">
-      <div class="ai-modal-header">
-        <h3>AI 参数配置</h3>
-        <button id="aiModalClose" class="modal-close-button" title="关闭">✕</button>
-      </div>
+  <button id="aiFabButton" class="hidden" type="button">AI</button>
+  <input type="hidden" id="aiModeSelect" value="none" /><input type="hidden" id="aiBaseUrlInput" value="" />
+  <input type="hidden" id="aiModelInput" value="" /><input type="hidden" id="aiApiKeyInput" value="" />
+  <input type="hidden" id="aiTemperatureInput" value="0.25" /><input type="hidden" id="aiApiTimeoutInput" value="120" />
+  <input type="hidden" id="agentTypeInput" value="codex" /><input type="hidden" id="agentExecutableInput" value="" />
+  <input type="hidden" id="agentModelInput" value="" /><input type="hidden" id="agentNameInput" value="mavis" />
+  <input type="hidden" id="agentTimeoutInput" value="180" />
 
-      <div class="ai-modal-body">
-        <div class="ai-modal-tabs">
-          <button class="ai-tab active" data-method="none">关闭 AI</button>
-          <button class="ai-tab" data-method="api">远程 API</button>
-          <button class="ai-tab" data-method="agent">Code Agent</button>
-        </div>
-
-        <!-- method: none -->
-        <div id="modalNoneSection" class="ai-method-section">
-          <p class="ai-modal-note">使用纯程序搜索：随机采样 + 局部扰动。不依赖任何外部 AI 服务。</p>
-        </div>
-
-        <!-- method: api -->
+  <div id="aiModalBackdrop" class="modal-backdrop hidden">
+    <div class="ai-modal" role="dialog" aria-modal="true" aria-label="AI 设置">
+      <div class="modal-header"><h2>AI 参数生成设置</h2><button id="aiModalClose" title="关闭">×</button></div>
+      <div class="modal-tabs"><button class="ai-tab active" data-method="none">程序搜索</button><button class="ai-tab" data-method="api">远程 API</button><button class="ai-tab" data-method="agent">本地 Code Agent</button></div>
+      <div class="modal-body">
+        <div id="modalNoneSection" class="ai-method-section"><p>不使用 AI，仅由有界程序搜索生成候选参数。</p></div>
         <div id="modalApiSection" class="ai-method-section hidden">
-          <div class="modal-field">
-            <label><span>预设模型</span>
-              <select id="modalApiPreset">
-                <option value="custom">自定义</option>
-              </select>
-            </label>
-          </div>
-          <div class="modal-field-row">
-            <label><span>Base URL</span><input id="modalApiBaseUrl" placeholder="https://api.openai.com/v1" /></label>
-            <label><span>模型名</span><input id="modalApiModel" placeholder="gpt-4o" /></label>
-          </div>
-          <div class="modal-field-row">
-            <label><span>API Key</span><input id="modalApiKey" type="password" autocomplete="off" placeholder="sk-..." /></label>
-          </div>
-          <div class="modal-field-row modal-field-triple">
-            <label><span>Temperature</span><input id="modalApiTemperature" type="number" value="0.25" min="0" max="2" step="0.05" /></label>
-            <label><span>Max Tokens</span><input id="modalApiMaxTokens" type="number" value="2000" min="1" step="1" /></label>
-            <label><span>超时 (s)</span><input id="modalApiTimeout" type="number" value="120" min="1" step="1" /></label>
-          </div>
-          <p class="ai-modal-note">API Key 仅通过环境变量传入 MATLAB 进程，不写入任何文件。</p>
+          <label><span>预设</span><select id="modalApiPreset"><option value="custom">自定义</option></select></label>
+          <div class="modal-grid"><label><span>Base URL</span><input id="modalApiBaseUrl" /></label><label><span>模型</span><input id="modalApiModel" /></label></div>
+          <label><span>API Key</span><input id="modalApiKey" type="password" autocomplete="off" /></label>
+          <div class="modal-grid triple"><label><span>Temperature</span><input id="modalApiTemperature" type="number" value="0.25" /></label><label><span>Max Tokens</span><input id="modalApiMaxTokens" type="number" value="2000" /></label><label><span>超时 (s)</span><input id="modalApiTimeout" type="number" value="120" /></label></div>
         </div>
-        <!-- method: Code Agent CLI -->
         <div id="modalAgentSection" class="ai-method-section hidden">
-          <div class="modal-field">
-            <label><span>Code Agent</span>
-              <select id="modalAgentType">
-                <option value="codex">Codex CLI</option>
-                <option value="minimax">MiniMax Code</option>
-                <option value="claude">Claude Code</option>
-                <option value="qwen">Qwen Code</option>
-                <option value="kimi">Kimi Code CLI</option>
-                <option value="codebuddy">CodeBuddy Code</option>
-              </select>
-            </label>
-          </div>
-          <div class="modal-field">
-            <label><span>可执行文件</span><input id="modalAgentExecutable" placeholder="自动发现本机 CLI" /></label>
-          </div>
-          <div class="agent-test-row">
-            <span id="modalAgentStatus" class="agent-status">尚未检测</span>
-            <button id="agentDiscoverButton" class="outline-button" type="button">重新发现</button>
-            <button id="agentTestButton" class="outline-button" type="button">测试连接</button>
-          </div>
-          <div class="modal-field-row">
-            <label><span>模型/配置（可选）</span><input id="modalAgentModel" placeholder="使用 CLI 默认配置" /></label>
-            <label id="modalAgentNameField"><span>MiniMax Agent</span><input id="modalAgentName" value="mavis" /></label>
-          </div>
-          <div class="modal-field-row">
-            <label><span>超时 (s)</span><input id="modalAgentTimeout" type="number" value="180" min="5" max="1800" step="1" /></label>
-          </div>
-          <p class="ai-modal-note">调用本机已登录的 Code Agent CLI 生成候选参数。CLI 仅以只读方式分析请求；每组参数仍必须经过 Simulink 仿真和固定指标验证。</p>
+          <label><span>Code Agent</span><select id="modalAgentType"><option value="codex">Codex CLI</option><option value="minimax">MiniMax Code</option><option value="claude">Claude Code</option><option value="qwen">Qwen Code</option><option value="kimi">Kimi Code CLI</option><option value="codebuddy">CodeBuddy Code</option></select></label>
+          <label><span>可执行文件</span><input id="modalAgentExecutable" placeholder="自动发现本机 CLI" /></label>
+          <div class="agent-test-row"><span id="modalAgentStatus">尚未检测</span><button id="agentDiscoverButton">重新发现</button><button id="agentTestButton">测试连接</button></div>
+          <div class="modal-grid"><label><span>模型/配置</span><input id="modalAgentModel" /></label><label id="modalAgentNameField"><span>MiniMax Agent</span><input id="modalAgentName" value="mavis" /></label></div>
+          <label><span>超时 (s)</span><input id="modalAgentTimeout" type="number" value="180" /></label>
         </div>
-        <hr class="modal-divider" />
-        <div class="modal-field-row">
-          <label><span>AI 每轮候选数</span><input id="modalAiCandidateCount" type="number" value="4" min="0" step="1" /></label>
-          <label class="check-control"><input id="modalAiFailOnError" type="checkbox" /> AI 失败时终止</label>
-        </div>
+        <div class="modal-grid"><label><span>AI 每轮候选数</span><input id="modalAiCandidateCount" type="number" value="4" /></label><label class="check-control"><input id="modalAiFailOnError" type="checkbox" /> AI 失败时终止</label></div>
       </div>
-
-      <div class="ai-modal-footer">
-        <button id="aiModalCancel" class="outline-button">取消</button>
-        <button id="aiModalApply" class="primary-button">应用配置</button>
-      </div>
+      <div class="modal-footer"><button id="aiModalCancel">取消</button><button id="aiModalApply" class="primary-button">应用</button></div>
     </div>
   </div>
 
@@ -284,24 +211,20 @@
             window.pidBridgeReadySent = true;
             htmlComponent.sendEventToMATLAB('BridgeReady', { loaded: true });
           }
-        } else {
-          window.setTimeout(deliverContext, 50);
-        }
+        } else window.setTimeout(deliverContext, 50);
       };
       htmlComponent.addEventListener('DataChanged', deliverContext);
       htmlComponent.addEventListener('PidAgentNavigate', (event) => {
         const data = event.Data || event.detail || event || {};
-        const view = data.view || htmlComponent.Data?.initialView || 'run';
-        if (typeof window.navigatePidAgentView === 'function') window.navigatePidAgentView(view);
+        if (typeof window.navigatePidAgentView === 'function') window.navigatePidAgentView(data.view || 'run');
       });
       htmlComponent.addEventListener('PidAgentGatewayResponse', (event) => {
-        if (typeof window.handlePidGatewayResponse === 'function') {
-          window.handlePidGatewayResponse(event);
-        }
+        if (typeof window.handlePidGatewayResponse === 'function') window.handlePidGatewayResponse(event);
       });
       deliverContext();
     }
   </script>
   <script src="./app_custom.js"></script>
+  <script src="./app_custom_v2.js"></script>
 </body>
 </html>

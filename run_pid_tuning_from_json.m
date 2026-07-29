@@ -52,6 +52,12 @@ cfg = localAssignString(cfg, raw, "referenceSignalName");
 cfg = localAssignString(cfg, raw, "outputSignalName");
 cfg = localAssignString(cfg, raw, "controlSignalName");
 cfg = localAssignString(cfg, raw, "currentSignalName");
+if isfield(raw, "evaluationLoops") && ~isempty(raw.evaluationLoops)
+    cfg.evaluationLoops = localEvaluationLoops(raw.evaluationLoops);
+end
+if isfield(raw, "searchStrategy")
+    cfg.search.strategy = lower(string(raw.searchStrategy));
+end
 cfg = localAssignNumber(cfg, raw, "randomSeed");
 cfg = localAssignNumber(cfg, raw, "maxIterations");
 cfg = localAssignNumber(cfg, raw, "numCandidates");
@@ -63,7 +69,8 @@ if isfield(raw, "targets") && isstruct(raw.targets)
     targetFields = ["overshootPctMax", "settlingTimeMax", ...
         "steadyStateErrorAbsMax", "iaeMax", "iseMax", "itaeMax", ...
         "maxAbsControlMax", "controlEnergyMax", "maxAbsCurrentMax", ...
-        "outputRippleMax", "controlSaturationFractionMax"];
+        "outputRippleMax", "controlSaturationFractionMax", ...
+        "trackingRmseMax", "disturbancePeakMax"];
     for field = targetFields
         if isfield(raw.targets, field)
             cfg.targets.(field) = double(raw.targets.(field));
@@ -71,12 +78,22 @@ if isfield(raw, "targets") && isstruct(raw.targets)
     end
 end
 
+if isfield(raw, "controlLowerLimit")
+    value = double(raw.controlLowerLimit);
+    if ~isscalar(value) || ~isfinite(value)
+        error("controlLowerLimit must be a finite scalar.");
+    end
+    cfg.metrics.controlLowerLimit = value;
+end
 if isfield(raw, "controlUpperLimit")
     value = double(raw.controlUpperLimit);
-    if ~isscalar(value) || ~isfinite(value) || value <= 0
-        error("controlUpperLimit must be a positive finite scalar.");
+    if ~isscalar(value) || ~isfinite(value)
+        error("controlUpperLimit must be a finite scalar.");
     end
     cfg.metrics.controlUpperLimit = value;
+end
+if cfg.metrics.controlLowerLimit >= cfg.metrics.controlUpperLimit
+    error("controlLowerLimit must be smaller than controlUpperLimit.");
 end
 
 result = main_pid_search(cfg);
@@ -111,6 +128,28 @@ for idx = 1:numel(input)
 end
 end
 
+function loops = localEvaluationLoops(input)
+template = struct("name", "", "role", "single", "pidPath", "", ...
+    "referenceSignalName", "", "outputSignalName", "", ...
+    "controlSignalName", "", "currentSignalName", "", ...
+    "weight", 1, "enabled", true, "primary", false, ...
+    "targets", struct(), "metrics", struct());
+loops = repmat(template, numel(input), 1);
+for index = 1:numel(input)
+    item = input(index);
+    for field = ["name", "role", "pidPath", "referenceSignalName", ...
+            "outputSignalName", "controlSignalName", "currentSignalName"]
+        if isfield(item, field)
+            loops(index).(field) = string(item.(field));
+        end
+    end
+    for field = ["weight", "enabled", "primary", "targets", "metrics"]
+        if isfield(item, field)
+            loops(index).(field) = item.(field);
+        end
+    end
+end
+end
 function cfg = localAssignString(cfg, raw, field)
 if isfield(raw, field) && strlength(string(raw.(field))) > 0
     cfg.(field) = string(raw.(field));

@@ -1,14 +1,14 @@
 function saveIterationLog(records, state, cfg)
 %SAVEITERATIONLOG Save MAT and CSV logs for each iteration.
 
-if ~exist(cfg.logging.outputDir, "dir")
-    mkdir(cfg.logging.outputDir);
+if ~exist(cfg.logging.runDir, "dir")
+    mkdir(cfg.logging.runDir);
 end
 
 iteration = records(1).iteration;
 
 if cfg.logging.saveMat
-    matFile = fullfile(cfg.logging.outputDir, sprintf("iteration_%03d.mat", iteration));
+    matFile = fullfile(cfg.logging.runDir, sprintf("iteration_%03d.mat", iteration));
     save(matFile, "records", "state", "cfg");
 end
 
@@ -46,10 +46,16 @@ if cfg.logging.saveCsv
         rows(idx).itae = m.itae;
         rows(idx).controlEnergy = m.controlEnergy;
         rows(idx).maxAbsControl = m.maxAbsControl;
+        rows(idx).maxAbsCurrent = m.maxAbsCurrent;
+        rows(idx).outputRipple = m.outputRipple;
+        rows(idx).controlSaturationFraction = m.controlSaturationFraction;
+        rows(idx).trackingRmse = m.trackingRmse;
+        rows(idx).stage = string(records(idx).stage);
+        rows(idx).stageIteration = records(idx).stageIteration;
     end
 
     tableRows = struct2table(rows);
-    csvFile = fullfile(cfg.logging.outputDir, sprintf("iteration_%03d.csv", iteration));
+    csvFile = fullfile(cfg.logging.runDir, sprintf("iteration_%03d.csv", iteration));
     writetable(tableRows, csvFile);
 end
 end

@@ -13,6 +13,10 @@ payload.startedAt = string(state.startedAt);
 payload.updatedAt = string(datetime("now", "Format", "yyyy-MM-dd HH:mm:ss"));
 payload.elapsedSeconds = localField(state, "elapsedSeconds", 0);
 payload.currentIteration = localField(state, "iteration", 0);
+payload.currentStage = string(localField(state, "currentStage", ""));
+payload.stageIndex = localField(state, "stageIndex", 0);
+payload.stageCount = localField(state, "stageCount", 0);
+payload.stageIteration = localField(state, "stageIteration", 0);
 payload.maxIterations = cfg.maxIterations;
 payload.numCandidatesPerIteration = cfg.numCandidates;
 payload.testedCount = localField(state, "testedCount", 0);
@@ -22,6 +26,9 @@ payload.runDir = string(cfg.logging.runDir);
 payload.aiEnabled = logical(cfg.ai.enabled);
 payload.aiMode = string(cfg.ai.mode);
 payload.targets = cfg.targets;
+payload.evaluationLoops = pid_tuning_core.normalizeEvaluationLoops(cfg);
+payload.searchStrategy = string(cfg.search.strategy);
+payload.stageSummaries = localField(state, "stageSummaries", []);
 
 if isfield(state, "baseline") && ~isempty(state.baseline)
     payload.baseline = pid_tuning_core.recordToJsonStruct(state.baseline, state, cfg);

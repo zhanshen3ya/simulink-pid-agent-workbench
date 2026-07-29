@@ -38,6 +38,7 @@ end
 
 for idx = 1:numel(candidates)
     candidates(idx) = localClipCandidate(candidates(idx), cfg);
+    candidates(idx) = localFreezeInactive(candidates(idx), state.searchCenter, cfg);
 end
 end
 
@@ -53,7 +54,7 @@ center = pid_tuning_core.normalizePidCandidate(state.searchCenter, cfg);
 scale = max(state.searchScale, cfg.search.minScale);
 
 for idx = 1:count
-    if state.iteration == 1 && idx == 1
+    if localField(state, "stageIteration", state.iteration) == 1 && idx == 1
         candidate = cfg.initialCandidate;
     else
         if rand() < cfg.search.randomFraction
@@ -113,6 +114,25 @@ end
 candidate = pid_tuning_core.normalizePidCandidate(candidate, cfg);
 end
 
+function candidate = localFreezeInactive(candidate, center, cfg)
+if ~isfield(cfg, "activePidIndices") || isempty(cfg.activePidIndices)
+    return;
+end
+center = pid_tuning_core.normalizePidCandidate(center, cfg);
+active = unique(double(cfg.activePidIndices(:)));
+for pidIndex = setdiff(1:numel(cfg.pidBlocks), active(:).')
+    candidate.pids(pidIndex) = center.pids(pidIndex);
+end
+candidate = pid_tuning_core.normalizePidCandidate(candidate, cfg);
+end
+
+function value = localField(source, name, fallback)
+if isstruct(source) && isfield(source, name)
+    value = source.(name);
+else
+    value = fallback;
+end
+end
 function candidates = localNormalizeCandidates(inputCandidates, cfg)
 template = pid_tuning_core.normalizePidCandidate(cfg.initialCandidate, cfg);
 if isempty(inputCandidates)

@@ -15,6 +15,31 @@ import server_custom
 import server_ai
 
 
+def single_loop_payload(model, **overrides):
+    payload = {
+        "modelPath": str(model),
+        "pidBlocks": [{
+            "name": "Outer PID", "path": "controller/Outer PID",
+            "bounds": {"Kp": [0, 10], "Ki": [0, 10], "Kd": [0, 1], "N": [1, 1000]},
+        }],
+        "availableSignalNames": ["Vref", "Vout", "duty", "iL"],
+        "signalMappingConfirmed": True,
+        "searchStrategy": "joint",
+        "maxIterations": 3,
+        "numCandidates": 2,
+        "evaluationLoops": [{
+            "name": "voltage", "role": "single", "pidPath": "controller/Outer PID",
+            "referenceSignalName": "Vref", "outputSignalName": "Vout",
+            "controlSignalName": "duty", "currentSignalName": "iL",
+            "weight": 1, "primary": True,
+            "controlLowerLimit": 0, "controlUpperLimit": 1,
+            "targets": {"overshootPctMax": 10, "settlingTimeMax": 2, "steadyStateErrorAbsMax": 0.1},
+        }],
+    }
+    payload.update(overrides)
+    return payload
+
+
 class EmbeddedIntegrationTests(unittest.TestCase):
     def test_custom_payload_preserves_matlab_context_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -23,26 +48,11 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             project = workdir / "controller.prj"
             model.touch()
             project.touch()
-            payload = {
-                "modelPath": str(model),
-                "workingDirectory": str(workdir),
-                "projectRoot": str(workdir),
-                "projectPath": str(project),
-                "pidBlocks": [{
-                    "name": "Outer PID",
-                    "path": "controller/Outer PID",
-                    "bounds": {
-                        "Kp": [0, 10], "Ki": [0, 10],
-                        "Kd": [0, 1], "N": [1, 1000],
-                    },
-                }],
-                "referenceSignalName": "Vref",
-                "outputSignalName": "Vout",
-                "controlSignalName": "duty",
-            }
-
+            payload = single_loop_payload(
+                model, workingDirectory=str(workdir), projectRoot=str(workdir),
+                projectPath=str(project),
+            )
             normalized = server_custom.normalize_custom_payload(payload)
-
             self.assertEqual(normalized["modelPath"], str(model.resolve()))
             self.assertEqual(normalized["workingDirectory"], str(workdir.resolve()))
             self.assertEqual(normalized["projectRoot"], str(workdir.resolve()))
@@ -53,77 +63,79 @@ class EmbeddedIntegrationTests(unittest.TestCase):
             workdir = Path(directory)
             model = workdir / "controller.slx"
             model.touch()
-            payload = {
-                "modelPath": str(model),
-                "projectPath": [str(workdir / "models"), str(workdir / "data")],
-                "pidBlocks": [{
-                    "path": "controller/PID",
-                    "bounds": {"Kp": [0, 1], "Ki": [0, 1], "Kd": [0, 0], "N": [100, 100]},
-                }],
-                "referenceSignalName": "r",
-                "outputSignalName": "y",
-                "controlSignalName": "u",
-            }
-
+            payload = single_loop_payload(model, projectPath=[str(workdir / "models"), str(workdir / "data")])
             normalized = server_custom.normalize_custom_payload(payload)
-
             self.assertEqual(normalized["projectPath"], "")
+
+    def test_signal_mapping_requires_explicit_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = single_loop_payload(model, signalMappingConfirmed=False)
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "SIGNAL_MAPPING_NOT_CONFIRMED")
 
     def test_manual_signal_mapping_rejects_unlogged_signal(self):
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "controller.slx"
             model.touch()
-            payload = {
-                "modelPath": str(model),
-                "pidBlocks": [{
-                    "path": "controller/PID",
-                    "bounds": {
-                        "Kp": [0, 1], "Ki": [0, 1],
-                        "Kd": [0, 0], "N": [100, 100],
-                    },
-                }],
-                "referenceSignalName": "Vref",
-                "outputSignalName": "wrong_voltage",
-                "controlSignalName": "duty",
-                "availableSignalNames": ["Vref", "Vout", "duty"],
-                "signalMappingConfirmed": True,
-                "evaluationPidPath": "controller/PID",
-            }
-
+            payload = single_loop_payload(model)
+            payload["evaluationLoops"][0]["outputSignalName"] = "wrong_voltage"
             with self.assertRaises(server_custom.RequestValidationError) as raised:
                 server_custom.normalize_custom_payload(payload)
-
             self.assertEqual(raised.exception.code, "SIGNAL_NOT_LOGGED")
-            self.assertEqual(raised.exception.field, "outputSignalName")
+            self.assertEqual(raised.exception.field, "evaluationLoops[0].outputSignalName")
 
     def test_manual_signal_mapping_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "controller.slx"
             model.touch()
-            payload = {
-                "modelPath": str(model),
-                "pidBlocks": [{
-                    "path": "controller/PID",
-                    "bounds": {
-                        "Kp": [0, 1], "Ki": [0, 1],
-                        "Kd": [0, 0], "N": [100, 100],
-                    },
-                }],
-                "referenceSignalName": "Vref",
-                "outputSignalName": "Vout",
-                "controlSignalName": "duty",
-                "currentSignalName": "iL",
-                "availableSignalNames": ["Vref", "Vout", "duty", "iL"],
-                "signalMappingConfirmed": True,
-                "evaluationPidPath": "controller/PID",
-            }
-
-            normalized = server_custom.normalize_custom_payload(payload)
-
+            normalized = server_custom.normalize_custom_payload(single_loop_payload(model))
             self.assertEqual(normalized["referenceSignalName"], "Vref")
             self.assertEqual(normalized["currentSignalName"], "iL")
             self.assertTrue(normalized["signalMappingConfirmed"])
-            self.assertEqual(normalized["evaluationPidPath"], "controller/PID")
+            self.assertEqual(normalized["evaluationPidPath"], "controller/Outer PID")
+            self.assertEqual(len(normalized["evaluationLoops"]), 1)
+
+    def test_dual_loop_cascade_requires_one_inner_and_one_outer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = single_loop_payload(model)
+            payload["pidBlocks"].append({
+                "name": "Inner PID", "path": "controller/Inner PID",
+                "bounds": {"Kp": [0, 10], "Ki": [0, 10], "Kd": [0, 1], "N": [1, 1000]},
+            })
+            payload["evaluationLoops"][0]["role"] = "outer"
+            payload["evaluationLoops"].append({
+                "name": "current", "role": "inner", "pidPath": "controller/Inner PID",
+                "referenceSignalName": "iRef", "outputSignalName": "iL",
+                "controlSignalName": "duty", "currentSignalName": "iL",
+                "weight": 1, "primary": False,
+                "controlLowerLimit": 0, "controlUpperLimit": 1,
+                "targets": {"overshootPctMax": 20},
+            })
+            payload["availableSignalNames"].append("iRef")
+            payload["searchStrategy"] = "cascade"
+            normalized = server_custom.normalize_custom_payload(payload)
+            self.assertEqual({loop["role"] for loop in normalized["evaluationLoops"]}, {"inner", "outer"})
+            payload["evaluationLoops"][1]["role"] = "outer"
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CASCADE_ROLE_REQUIRED")
+
+    def test_loop_control_limits_must_be_ordered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = single_loop_payload(model)
+            payload["evaluationLoops"][0]["controlLowerLimit"] = 1
+            payload["evaluationLoops"][0]["controlUpperLimit"] = 0
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CONTROL_LIMIT_INVALID")
+
     def test_custom_endpoint_returns_structured_redacted_error(self):
         with tempfile.TemporaryDirectory() as directory:
             original_log = server_custom.REQUEST_LOG
@@ -214,6 +226,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("function setup(htmlComponent)", html)
         self.assertIn("sendEventToMATLAB('BridgeReady'", html)
         self.assertIn('src="./app_custom.js"', html)
+        self.assertIn('src="./app_custom_v2.js"', html)
         self.assertIn('href="./styles_custom.css"', html)
         self.assertIn('id="effectVerdict"', html)
         self.assertIn('id="effectComparisonRows"', html)
@@ -234,6 +247,8 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         http_helper = (ROOT / "+pid_agent_ui" / "sendGatewayHttpRequest.m").read_text(encoding="utf-8")
         self.assertNotIn("webwrite", matlab_app)
         self.assertIn("pid_agent_ui.sendGatewayHttpRequest", matlab_app)
+        self.assertIn("performModelAction", matlab_app)
+        self.assertIn("applyPidCandidateToModel", matlab_app)
         self.assertIn("matlab.net.http.RequestMessage", http_helper)
 
         server_ai_text = (ROOT / "local_pid_gateway" / "server_ai.py").read_text(encoding="utf-8")

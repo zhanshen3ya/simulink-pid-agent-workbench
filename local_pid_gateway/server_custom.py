@@ -34,6 +34,63 @@ MATLAB = find_matlab_executable()
 JOBS = {}
 REQUEST_LOG = ROOT / "local_pid_gateway" / "gateway_requests.jsonl"
 REQUEST_LOG_LOCK = threading.Lock()
+SERVER_VERSION = "0.4.0-dev"
+MATLAB_HEALTH_CACHE = {"checkedAt": 0.0, "ready": False, "error": "正在检查 MATLAB"}
+MATLAB_HEALTH_LOCK = threading.Lock()
+MATLAB_HEALTH_PROBING = False
+
+
+def probe_matlab(force=False):
+    now = time.time()
+    with MATLAB_HEALTH_LOCK:
+        cached = dict(MATLAB_HEALTH_CACHE)
+    if not force and now - cached["checkedAt"] < 60:
+        return cached
+    result = {"checkedAt": now, "ready": False, "error": ""}
+    if not MATLAB.is_file():
+        result["error"] = f"MATLAB executable not found: {MATLAB}"
+    else:
+        try:
+            completed = subprocess.run(
+                [str(MATLAB), "-batch", "disp('PID_AGENT_MATLAB_OK')"],
+                cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, errors="replace", timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            result["ready"] = completed.returncode == 0 and "PID_AGENT_MATLAB_OK" in (completed.stdout or "")
+            if not result["ready"]:
+                result["error"] = "\n".join((completed.stdout or "").splitlines()[-8:]) or f"MATLAB exited with code {completed.returncode}"
+        except subprocess.TimeoutExpired:
+            result["error"] = "MATLAB 启动检查超过 30 秒"
+        except Exception as error:
+            result["error"] = str(error)
+    with MATLAB_HEALTH_LOCK:
+        MATLAB_HEALTH_CACHE.update(result)
+        return dict(MATLAB_HEALTH_CACHE)
+
+
+def matlab_health_snapshot():
+    global MATLAB_HEALTH_PROBING
+    with MATLAB_HEALTH_LOCK:
+        snapshot = dict(MATLAB_HEALTH_CACHE)
+        stale = time.time() - snapshot["checkedAt"] >= 60
+        if stale and not MATLAB_HEALTH_PROBING:
+            MATLAB_HEALTH_PROBING = True
+            should_start = True
+        else:
+            should_start = False
+    if should_start:
+        def refresh():
+            global MATLAB_HEALTH_PROBING
+            try:
+                probe_matlab(force=True)
+            finally:
+                with MATLAB_HEALTH_LOCK:
+                    MATLAB_HEALTH_PROBING = False
+        threading.Thread(target=refresh, daemon=True).start()
+    return snapshot
+
+
 SENSITIVE_FIELDS = {"apikey", "api_key", "authorization", "password", "secret", "token"}
 
 
@@ -113,10 +170,13 @@ def read_history(job_id):
 
 
 def read_status(job_id):
-    status = read_json(RUNS / job_id / "current_status.json")
+    run_dir = RUNS / job_id
+    status = read_json(run_dir / "current_status.json")
     if isinstance(status, dict):
         status["jobId"] = job_id
-        status["runDir"] = str(RUNS / job_id)
+        status["runDir"] = str(run_dir)
+        status["resultApplied"] = (run_dir / "apply_manifest.json").is_file()
+        status["rollbackAvailable"] = status["resultApplied"]
     return status
 
 
@@ -232,6 +292,56 @@ def validate_bounds(bounds, pid_index):
     return result
 
 
+TARGET_FIELDS = (
+    "overshootPctMax", "settlingTimeMax", "steadyStateErrorAbsMax",
+    "iaeMax", "iseMax", "itaeMax", "maxAbsControlMax", "controlEnergyMax",
+    "maxAbsCurrentMax", "outputRippleMax", "controlSaturationFractionMax",
+    "trackingRmseMax", "disturbancePeakMax",
+)
+
+
+def normalize_targets(raw, field_prefix="targets"):
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise RequestValidationError("评价指标必须是对象。", "TARGET_INVALID", field_prefix)
+    result = {}
+    for field in TARGET_FIELDS:
+        if field not in raw:
+            continue
+        try:
+            value = float(raw[field])
+        except (TypeError, ValueError):
+            raise RequestValidationError(
+                f"评价指标 {field} 必须是数字。", "TARGET_INVALID", f"{field_prefix}.{field}"
+            )
+        if value != value or abs(value) == float("inf") or value < 0:
+            raise RequestValidationError(
+                f"评价指标 {field} 必须是非负有限数字。",
+                "TARGET_INVALID", f"{field_prefix}.{field}"
+            )
+        result[field] = value
+    return result
+
+
+def normalize_control_limits(source, field_prefix=""):
+    try:
+        lower = float(source.get("controlLowerLimit", -1e12))
+        upper = float(source.get("controlUpperLimit", 1e12))
+    except (TypeError, ValueError):
+        raise RequestValidationError(
+            "控制量上下限必须是数字。", "CONTROL_LIMIT_INVALID", field_prefix
+        )
+    if not all(value == value and abs(value) < float("inf") for value in (lower, upper)):
+        raise RequestValidationError(
+            "控制量上下限必须是有限数字。", "CONTROL_LIMIT_INVALID", field_prefix
+        )
+    if lower >= upper:
+        raise RequestValidationError(
+            "控制量下限必须小于上限。", "CONTROL_LIMIT_INVALID", field_prefix
+        )
+    return lower, upper
+
+
 def normalize_custom_payload(payload):
     if not isinstance(payload, dict):
         raise RequestValidationError("请求配置必须是 JSON 对象。")
@@ -244,15 +354,15 @@ def normalize_custom_payload(payload):
 
     blocks = []
     for index, block in enumerate(raw_blocks, 1):
-        path = str((block or {}).get("path") or "").strip()
-        if not path:
+        path_value = str((block or {}).get("path") or "").strip()
+        if not path_value:
             raise RequestValidationError(
                 f"PID {index} 缺少 Simulink 块路径。",
                 "PID_PATH_REQUIRED", f"pidBlocks[{index - 1}].path"
             )
         blocks.append({
             "name": str((block or {}).get("name") or f"pid{index}"),
-            "path": path,
+            "path": path_value,
             "bounds": validate_bounds((block or {}).get("bounds"), index),
         })
 
@@ -264,13 +374,13 @@ def normalize_custom_payload(payload):
         raise RequestValidationError(
             "迭代轮数、候选数和随机种子必须是整数。", "SEARCH_CONFIG_INVALID"
         )
-    if max_iterations < 1:
+    if max_iterations < 3:
         raise RequestValidationError(
-            "迭代轮数必须大于 0。", "SEARCH_CONFIG_INVALID", "maxIterations"
+            "迭代轮数至少为 3。", "SEARCH_CONFIG_INVALID", "maxIterations"
         )
-    if num_candidates < 1:
+    if num_candidates < 2:
         raise RequestValidationError(
-            "每轮候选数必须大于 0。", "SEARCH_CONFIG_INVALID", "numCandidates"
+            "每轮候选数至少为 2。", "SEARCH_CONFIG_INVALID", "numCandidates"
         )
 
     stop_time_text = str(payload.get("stopTime") or "10").strip()
@@ -285,87 +395,140 @@ def normalize_custom_payload(payload):
             "仿真停止时间必须是正有限数字。", "STOP_TIME_INVALID", "stopTime"
         )
 
-    targets = {}
-    for field in (
-        "overshootPctMax", "settlingTimeMax", "steadyStateErrorAbsMax",
-        "iaeMax", "iseMax", "itaeMax", "maxAbsControlMax", "controlEnergyMax",
-        "maxAbsCurrentMax", "outputRippleMax", "controlSaturationFractionMax",
-    ):
-        if field in (payload.get("targets") or {}):
-            try:
-                value = float(payload["targets"][field])
-            except (TypeError, ValueError):
-                raise RequestValidationError(
-                    f"验证指标 {field} 必须是数字。", "TARGET_INVALID", f"targets.{field}"
-                )
-            if value != value or abs(value) == float("inf") or value < 0:
-                raise RequestValidationError(
-                    f"验证指标 {field} 必须是非负有限数字。",
-                    "TARGET_INVALID", f"targets.{field}"
-                )
-            targets[field] = value
-
-    try:
-        control_upper_limit = float(payload.get("controlUpperLimit") or 1e12)
-    except (TypeError, ValueError):
+    available = payload.get("availableSignalNames")
+    if not isinstance(available, list) or not available:
         raise RequestValidationError(
-            "控制量上限必须是数字。", "CONTROL_LIMIT_INVALID", "controlUpperLimit"
+            "必须提交当前模型的已记录信号清单。",
+            "SIGNAL_LIST_REQUIRED", "availableSignalNames"
         )
-    if not (control_upper_limit > 0 and control_upper_limit < float("inf")):
+    available_signal_names = list(dict.fromkeys(
+        str(item).strip() for item in available if str(item).strip()
+    ))
+    if not available_signal_names:
         raise RequestValidationError(
-            "控制量上限必须是正有限数字。", "CONTROL_LIMIT_INVALID", "controlUpperLimit"
+            "当前模型没有可用于评价的已记录信号。",
+            "SIGNAL_LIST_REQUIRED", "availableSignalNames"
+        )
+    if payload.get("signalMappingConfirmed") is not True:
+        raise RequestValidationError(
+            "必须人工确认每个环路的评价信号映射。",
+            "SIGNAL_MAPPING_NOT_CONFIRMED", "signalMappingConfirmed"
         )
 
-    signal_values = {}
-    for field, label in (
-        ("referenceSignalName", "有效参考值"),
-        ("outputSignalName", "反馈 / 被控输出"),
-        ("controlSignalName", "PID 控制输出"),
-    ):
-        name = str(payload.get(field) or "").strip()
-        if not name:
+    selected_paths = {item["path"] for item in blocks}
+    raw_loops = payload.get("evaluationLoops")
+    if not isinstance(raw_loops, list) or len(raw_loops) != len(blocks):
+        raise RequestValidationError(
+            "每个选中的 PID 都必须配置一个独立评价环路。",
+            "LOOP_MAPPING_REQUIRED", "evaluationLoops"
+        )
+
+    global_targets = normalize_targets(payload.get("targets"))
+    global_lower, global_upper = normalize_control_limits(payload)
+    loops = []
+    used_pid_paths = set()
+    for index, raw_loop in enumerate(raw_loops):
+        if not isinstance(raw_loop, dict):
             raise RequestValidationError(
-                f"{label}不能为空。", "SIGNAL_REQUIRED", field
+                "环路配置必须是对象。", "LOOP_MAPPING_INVALID", f"evaluationLoops[{index}]"
             )
-        signal_values[field] = name
-    signal_values["currentSignalName"] = str(
-        payload.get("currentSignalName") or ""
-    ).strip()
-    if signal_values["referenceSignalName"] == signal_values["outputSignalName"]:
-        raise RequestValidationError(
-            "有效参考值和反馈输出不能是同一信号。",
-            "SIGNAL_MAPPING_INVALID", "outputSignalName"
-        )
-
-    raw_available = payload.get("availableSignalNames")
-    if raw_available is None:
-        available_signal_names = []
-    elif not isinstance(raw_available, list):
-        raise RequestValidationError(
-            "availableSignalNames 必须是数组。",
-            "SIGNAL_LIST_INVALID", "availableSignalNames"
-        )
-    else:
-        available_signal_names = list(dict.fromkeys(
-            str(item).strip() for item in raw_available if str(item).strip()
-        ))
-    if available_signal_names:
-        for field, name in signal_values.items():
-            if name and name not in available_signal_names:
+        pid_path = str(raw_loop.get("pidPath") or "").strip()
+        if pid_path not in selected_paths or pid_path in used_pid_paths:
+            raise RequestValidationError(
+                "环路必须唯一对应一个已选 PID。",
+                "LOOP_PID_INVALID", f"evaluationLoops[{index}].pidPath"
+            )
+        used_pid_paths.add(pid_path)
+        role = str(raw_loop.get("role") or "single").strip().lower()
+        if role not in {"single", "inner", "outer", "coupled"}:
+            raise RequestValidationError(
+                "环路角色必须是 single、inner、outer 或 coupled。",
+                "LOOP_ROLE_INVALID", f"evaluationLoops[{index}].role"
+            )
+        signals = {}
+        for field in ("referenceSignalName", "outputSignalName", "controlSignalName"):
+            name = str(raw_loop.get(field) or "").strip()
+            if not name:
+                raise RequestValidationError(
+                    "参考、反馈和控制信号都必须选择。",
+                    "SIGNAL_REQUIRED", f"evaluationLoops[{index}].{field}"
+                )
+            if name not in available_signal_names:
                 raise RequestValidationError(
                     f"信号 {name} 尚未启用记录或不属于当前模型。",
-                    "SIGNAL_NOT_LOGGED", field
+                    "SIGNAL_NOT_LOGGED", f"evaluationLoops[{index}].{field}"
                 )
-
-    evaluation_pid_path = str(payload.get("evaluationPidPath") or "").strip()
-    selected_paths = {item["path"] for item in blocks}
-    if evaluation_pid_path and evaluation_pid_path not in selected_paths:
-        raise RequestValidationError(
-            "主评价 PID 必须属于当前选中的 PID。",
-            "EVALUATION_PID_INVALID", "evaluationPidPath"
+            signals[field] = name
+        if signals["referenceSignalName"] == signals["outputSignalName"]:
+            raise RequestValidationError(
+                "参考信号和反馈信号不能相同。",
+                "SIGNAL_MAPPING_INVALID", f"evaluationLoops[{index}].outputSignalName"
+            )
+        current_name = str(raw_loop.get("currentSignalName") or "").strip()
+        if current_name and current_name not in available_signal_names:
+            raise RequestValidationError(
+                f"信号 {current_name} 尚未启用记录或不属于当前模型。",
+                "SIGNAL_NOT_LOGGED", f"evaluationLoops[{index}].currentSignalName"
+            )
+        try:
+            weight = float(raw_loop.get("weight", 1))
+        except (TypeError, ValueError):
+            raise RequestValidationError(
+                "环路权重必须是数字。", "LOOP_WEIGHT_INVALID", f"evaluationLoops[{index}].weight"
+            )
+        if not (weight > 0 and weight < float("inf")):
+            raise RequestValidationError(
+                "环路权重必须是正有限数字。",
+                "LOOP_WEIGHT_INVALID", f"evaluationLoops[{index}].weight"
+            )
+        loop_lower, loop_upper = normalize_control_limits(
+            raw_loop, f"evaluationLoops[{index}]"
         )
-    if not evaluation_pid_path:
-        evaluation_pid_path = blocks[0]["path"]
+        loops.append({
+            "name": str(raw_loop.get("name") or f"loop{index + 1}"),
+            "role": role,
+            "pidPath": pid_path,
+            **signals,
+            "currentSignalName": current_name,
+            "weight": weight,
+            "enabled": bool(raw_loop.get("enabled", True)),
+            "primary": bool(raw_loop.get("primary", False)),
+            "targets": normalize_targets(
+                raw_loop.get("targets"), f"evaluationLoops[{index}].targets"
+            ),
+            "metrics": {
+                "controlLowerLimit": loop_lower,
+                "controlUpperLimit": loop_upper,
+            },
+        })
+
+    if used_pid_paths != selected_paths:
+        raise RequestValidationError(
+            "环路配置必须覆盖全部已选 PID。", "LOOP_MAPPING_INCOMPLETE", "evaluationLoops"
+        )
+    primary_indices = [index for index, item in enumerate(loops) if item["primary"]]
+    if len(primary_indices) > 1:
+        raise RequestValidationError(
+            "只能指定一个主评价环路。", "PRIMARY_LOOP_INVALID", "evaluationLoops"
+        )
+    if not primary_indices:
+        preferred = next((index for index, item in enumerate(loops) if item["role"] == "outer"), 0)
+        loops[preferred]["primary"] = True
+    primary = next(item for item in loops if item["primary"])
+
+    strategy = str(payload.get("searchStrategy") or "auto").strip().lower()
+    if strategy not in {"auto", "joint", "cascade"}:
+        raise RequestValidationError(
+            "调参策略必须是 auto、joint 或 cascade。",
+            "SEARCH_STRATEGY_INVALID", "searchStrategy"
+        )
+    roles = {item["role"] for item in loops}
+    if strategy in {"auto", "cascade"} and len(loops) == 2 and roles != {"inner", "outer"}:
+        raise RequestValidationError(
+            "级联双环必须分别标记 inner 和 outer。",
+            "CASCADE_ROLE_REQUIRED", "evaluationLoops"
+        )
+
     return {
         "modelPath": model_path,
         "workingDirectory": normalize_optional_directory(payload.get("workingDirectory")),
@@ -373,21 +536,25 @@ def normalize_custom_payload(payload):
         "projectPath": normalize_project_path(payload.get("projectPath")),
         "pidBlocks": blocks,
         "stopTime": stop_time_text,
-        "referenceSignalName": signal_values["referenceSignalName"],
-        "outputSignalName": signal_values["outputSignalName"],
-        "controlSignalName": signal_values["controlSignalName"],
-        "currentSignalName": signal_values["currentSignalName"],
+        "referenceSignalName": primary["referenceSignalName"],
+        "outputSignalName": primary["outputSignalName"],
+        "controlSignalName": primary["controlSignalName"],
+        "currentSignalName": primary["currentSignalName"],
+        "evaluationLoops": loops,
         "availableSignalNames": available_signal_names,
-        "signalMappingConfirmed": bool(payload.get("signalMappingConfirmed", False)),
-        "evaluationPidPath": evaluation_pid_path,
-        "controlUpperLimit": control_upper_limit,
+        "signalMappingConfirmed": True,
+        "evaluationPidPath": primary["pidPath"],
+        "controlLowerLimit": global_lower,
+        "controlUpperLimit": global_upper,
+        "searchStrategy": strategy,
         "maxIterations": max_iterations,
         "numCandidates": num_candidates,
         "randomSeed": random_seed,
         "stopOnFirstPass": bool(payload.get("stopOnFirstPass", False)),
         "useParallel": bool(payload.get("useParallel", False)),
-        "targets": targets,
+        "targets": global_targets,
     }
+
 
 def trigger_code_backup(job_id):
     if os.environ.get("PID_GIT_AUTO_BACKUP", "1").lower() in ("0", "false", "off"):
@@ -407,8 +574,9 @@ def trigger_code_backup(job_id):
     )
 
 def launch_job(job_id, script):
-    if not MATLAB.is_file():
-        raise RuntimeError(f"找不到 MATLAB: {MATLAB}")
+    health = probe_matlab()
+    if not health["ready"]:
+        raise RuntimeError("MATLAB 当前不可启动：" + health["error"])
     process = subprocess.Popen(
         [str(MATLAB), "-batch", f"run('{matlab_quote(script)}')"],
         cwd=str(ROOT),
@@ -495,19 +663,35 @@ def start_custom_job(payload):
 
 
 def start_demo_job():
+    model_path = ROOT / "pid_ai_cascade_two_pid_demo.slx"
+    if not model_path.is_file():
+        raise RuntimeError(f"级联双环示例模型不存在: {model_path}")
     return start_custom_job({
-        "modelPath": str(ROOT / "pid_ai_cascade_two_pid_demo.slx"),
+        "modelPath": str(model_path),
         "pidBlocks": [
             {"name": "outer", "path": "pid_ai_cascade_two_pid_demo/Outer PID", "bounds": {"Kp": [0, 40], "Ki": [0, 30], "Kd": [0, 10], "N": [10, 500]}},
             {"name": "inner", "path": "pid_ai_cascade_two_pid_demo/Inner PID", "bounds": {"Kp": [0, 60], "Ki": [0, 40], "Kd": [0, 10], "N": [10, 500]}},
         ],
-        "stopTime": "8",
-        "referenceSignalName": "r",
-        "outputSignalName": "y",
-        "controlSignalName": "u",
-        "maxIterations": 8,
-        "numCandidates": 14,
-        "stopOnFirstPass": False,
+        "stopTime": "8", "maxIterations": 9, "numCandidates": 14,
+        "stopOnFirstPass": False, "searchStrategy": "cascade",
+        "availableSignalNames": ["r", "y", "inner_ref", "inner_y", "u"],
+        "signalMappingConfirmed": True,
+        "evaluationLoops": [
+            {
+                "name": "position", "role": "outer", "pidPath": "pid_ai_cascade_two_pid_demo/Outer PID",
+                "referenceSignalName": "r", "outputSignalName": "y", "controlSignalName": "inner_ref",
+                "currentSignalName": "", "weight": 1, "primary": True,
+                "controlLowerLimit": -20, "controlUpperLimit": 20,
+                "targets": {"overshootPctMax": 12, "settlingTimeMax": 6, "steadyStateErrorAbsMax": 0.05, "controlSaturationFractionMax": 0.02},
+            },
+            {
+                "name": "velocity", "role": "inner", "pidPath": "pid_ai_cascade_two_pid_demo/Inner PID",
+                "referenceSignalName": "inner_ref", "outputSignalName": "inner_y", "controlSignalName": "u",
+                "currentSignalName": "", "weight": 1, "primary": False,
+                "controlLowerLimit": -100, "controlUpperLimit": 100,
+                "targets": {"overshootPctMax": 15, "settlingTimeMax": 2, "steadyStateErrorAbsMax": 0.08, "controlSaturationFractionMax": 0.02},
+            },
+        ],
         "targets": {"overshootPctMax": 12, "settlingTimeMax": 6, "steadyStateErrorAbsMax": 0.05},
     })
 
@@ -552,6 +736,83 @@ def inspect_model(model_path):
             except FileNotFoundError:
                 pass
 
+
+def run_matlab_action(payload, run_dir, timeout=180):
+    request_file = run_dir / "model_action_request.json"
+    response_file = run_dir / "model_action_response.json"
+    request_file.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    try:
+        response_file.unlink(missing_ok=True)
+    except TypeError:
+        if response_file.exists():
+            response_file.unlink()
+    command = (
+        "root='{root}'; cd(root); "
+        "addpath(root, fullfile(root,'pid_tuning_core')); "
+        "apply_pid_job_from_json('{request}', '{response}');"
+    ).format(
+        root=matlab_quote(ROOT.as_posix()),
+        request=matlab_quote(request_file.as_posix()),
+        response=matlab_quote(response_file.as_posix()),
+    )
+    completed = subprocess.run(
+        [str(MATLAB), "-batch", command], cwd=str(ROOT),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, errors="replace", timeout=timeout,
+    )
+    if completed.returncode != 0 or not response_file.is_file():
+        tail = "\n".join((completed.stdout or "").splitlines()[-16:])
+        raise RuntimeError(f"MATLAB 模型操作失败。\n{tail}")
+    result = read_json(response_file)
+    if not isinstance(result, dict):
+        raise RuntimeError("MATLAB 模型操作没有返回有效结果。")
+    return result
+
+
+def apply_job_result(job_id):
+    run_dir = RUNS / job_id
+    request_config = read_json(run_dir / "request_config.json")
+    best_result = read_json(run_dir / "best_result.json")
+    if not isinstance(request_config, dict) or not isinstance(best_result, dict):
+        raise RequestValidationError("任务配置或最佳结果不存在。", "JOB_RESULT_MISSING")
+    if best_result.get("kind") != "bestPassing":
+        raise RequestValidationError(
+            "只有通过全部硬指标的参数才允许写入模型。", "BEST_RESULT_NOT_PASSED"
+        )
+    manifest = run_dir / "apply_manifest.json"
+    if manifest.is_file():
+        raise RequestValidationError(
+            "该任务结果已经写入模型，请先回滚后再应用。", "RESULT_ALREADY_APPLIED"
+        )
+    result_record = best_result.get("result") or {}
+    candidate = result_record.get("candidate")
+    if not candidate:
+        raise RequestValidationError("最佳结果缺少 PID 参数。", "JOB_RESULT_MISSING")
+    return run_matlab_action({
+        "action": "apply",
+        "modelPath": request_config["modelPath"],
+        "pidBlocks": request_config["pidBlocks"],
+        "candidate": candidate,
+        "runDir": str(run_dir),
+    }, run_dir)
+
+
+def rollback_job_result(job_id):
+    run_dir = RUNS / job_id
+    manifest = run_dir / "apply_manifest.json"
+    if not manifest.is_file():
+        raise RequestValidationError(
+            "该任务没有可回滚的模型修改。", "ROLLBACK_NOT_AVAILABLE"
+        )
+    result = run_matlab_action({
+        "action": "rollback", "manifestPath": str(manifest)
+    }, run_dir)
+    archive = run_dir / f"apply_manifest_rolled_back_{int(time.time())}.json"
+    manifest.replace(archive)
+    result["archivedManifestPath"] = str(archive)
+    return result
 
 def select_model_file():
     script = r"""
@@ -638,6 +899,19 @@ class Handler(BaseHTTPRequestHandler):
                 log_request(request_id, "POST", path, 200, payload)
                 self.send_json({"jobId": job_id, "status": "started", "requestId": request_id}, 200, request_id)
                 return
+            if path.startswith("/api/pid/jobs/"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 5 and parts[4] in {"apply", "rollback"}:
+                    job_id = parts[3]
+                    if not (RUNS / job_id).is_dir():
+                        raise RequestValidationError("任务不存在。", "JOB_NOT_FOUND")
+                    if parts[4] == "apply":
+                        result = apply_job_result(job_id)
+                    else:
+                        result = rollback_job_result(job_id)
+                    log_request(request_id, "POST", path, 200)
+                    self.send_json({**result, "requestId": request_id}, 200, request_id)
+                    return
             if path == "/api/pid/models/discover":
                 payload = self.read_json_body()
                 result = inspect_model(payload.get("modelPath"))
@@ -665,7 +939,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/api/health":
-            self.send_json({"ok": True, "root": str(ROOT), "runsDir": str(RUNS), "matlab": str(MATLAB), "matlabAvailable": MATLAB.is_file(), "customModelApi": True})
+            health = matlab_health_snapshot()
+            self.send_json({
+                "ok": True, "root": str(ROOT), "runsDir": str(RUNS),
+                "matlab": str(MATLAB), "matlabAvailable": MATLAB.is_file(),
+                "matlabReady": bool(health.get("ready")),
+                "matlabProbeError": health.get("error", ""),
+                "matlabCheckedAt": health.get("checkedAt", 0),
+                "customModelApi": True, "serverVersion": SERVER_VERSION,
+            })
             return
         if path == "/api/pid/jobs":
             self.send_json({"jobs": list_jobs()})

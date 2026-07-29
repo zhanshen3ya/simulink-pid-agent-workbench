@@ -120,6 +120,17 @@ classdef PidAgentWebApp < handle
             if isfield(data, "method")
                 method = upper(string(data.method));
             end
+            actionTokens = regexp(char(requestPath), ...
+                '^/api/pid/jobs/([A-Za-z0-9_-]+)/(apply|rollback)$', ...
+                'tokens', 'once');
+            if method == "POST" && ~isempty(actionTokens)
+                response = app.performModelAction(response, ...
+                    string(actionTokens{1}), string(actionTokens{2}));
+                sendEventToHTMLSource(app.HTML, ...
+                    "PidAgentGatewayResponse", response);
+                return;
+            end
+
             url = "http://127.0.0.1:8788" + requestPath;
             try
                 body = struct();
@@ -142,6 +153,59 @@ classdef PidAgentWebApp < handle
             end
             sendEventToHTMLSource(app.HTML, ...
                 "PidAgentGatewayResponse", response);
+        end
+
+        function response = performModelAction(~, response, jobId, action)
+            rootDir = fileparts(fileparts(mfilename("fullpath")));
+            runDir = fullfile(rootDir, "pid_tuning_runs", jobId);
+            try
+                if ~isfolder(runDir)
+                    error("PIDAgent:JobNotFound", "Tuning job does not exist: %s", jobId);
+                end
+                manifestPath = fullfile(runDir, "apply_manifest.json");
+                if action == "apply"
+                    if isfile(manifestPath)
+                        error("PIDAgent:AlreadyApplied", ...
+                            "This result is already applied. Roll it back before applying again.");
+                    end
+                    configPath = fullfile(runDir, "request_config.json");
+                    resultPath = fullfile(runDir, "best_result.json");
+                    if ~isfile(configPath) || ~isfile(resultPath)
+                        error("PIDAgent:ResultMissing", "Tuning configuration or result is missing.");
+                    end
+                    config = jsondecode(fileread(configPath));
+                    best = jsondecode(fileread(resultPath));
+                    if ~isfield(best, "kind") || string(best.kind) ~= "bestPassing" || ...
+                            ~isfield(best, "result") || ~isfield(best.result, "candidate")
+                        error("PIDAgent:ResultNotPassed", ...
+                            "Only a result that passes every hard metric can be applied.");
+                    end
+                    receipt = pid_tuning_core.applyPidCandidateToModel( ...
+                        config.modelPath, config.pidBlocks, ...
+                        best.result.candidate, runDir);
+                else
+                    if ~isfile(manifestPath)
+                        error("PIDAgent:RollbackUnavailable", ...
+                            "This tuning job has no applied parameters to roll back.");
+                    end
+                    receipt = pid_tuning_core.rollbackPidModel(manifestPath);
+                    archivePath = fullfile(runDir, ...
+                        "apply_manifest_rolled_back_" + string(posixtime(datetime("now"))) + ".json");
+                    movefile(manifestPath, archivePath, "f");
+                    receipt.archivedManifestPath = string(archivePath);
+                end
+                response.ok = true;
+                response.payload = receipt;
+                response.error = "";
+                response.statusCode = 200;
+            catch exception
+                response.ok = false;
+                response.statusCode = 400;
+                response.error = string(exception.message);
+                response.payload = struct("error", string(exception.message), ...
+                    "message", string(exception.message), ...
+                    "code", string(exception.identifier));
+            end
         end
 
         function message = gatewayErrorMessage(~, payload, statusCode, statusText)

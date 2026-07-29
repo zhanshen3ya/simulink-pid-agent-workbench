@@ -159,8 +159,9 @@ def normalize_ai(payload, num_candidates):
     return result, api_key, {}
 
 def launch_job(job_id, script, extra_env=None):
-    if not base.MATLAB.is_file():
-        raise RuntimeError(f"找不到 MATLAB: {base.MATLAB}")
+    health = base.probe_matlab()
+    if not health["ready"]:
+        raise RuntimeError("MATLAB 当前不可启动：" + health["error"])
     environment = os.environ.copy()
     environment.update(extra_env or {})
     process = subprocess.Popen(
@@ -260,21 +261,23 @@ def start_custom_job(payload):
 def start_single_pid_demo():
     model_path = base.ROOT / "pid_ai_second_order_demo.slx"
     if not model_path.is_file():
-        raise RuntimeError(f"单 PID Demo 文件不存在: {model_path}")
+        raise RuntimeError(f"单 PID 示例模型不存在: {model_path}")
     return start_custom_job({
         "modelPath": str(model_path),
         "pidBlocks": [{
-            "name": "single",
-            "path": "pid_ai_second_order_demo/PID Controller",
+            "name": "single", "path": "pid_ai_second_order_demo/PID Controller",
             "bounds": {"Kp": [0, 40], "Ki": [0, 30], "Kd": [0, 8], "N": [10, 500]},
         }],
-        "referenceSignalName": "r",
-        "outputSignalName": "y",
-        "controlSignalName": "u",
-        "stopTime": "8",
-        "maxIterations": 8,
-        "numCandidates": 12,
-        "stopOnFirstPass": False,
+        "stopTime": "8", "maxIterations": 8, "numCandidates": 12,
+        "stopOnFirstPass": False, "searchStrategy": "joint",
+        "availableSignalNames": ["r", "y", "u"], "signalMappingConfirmed": True,
+        "evaluationLoops": [{
+            "name": "output", "role": "single", "pidPath": "pid_ai_second_order_demo/PID Controller",
+            "referenceSignalName": "r", "outputSignalName": "y", "controlSignalName": "u",
+            "currentSignalName": "", "weight": 1, "primary": True,
+            "controlLowerLimit": -100, "controlUpperLimit": 100,
+            "targets": {"overshootPctMax": 10, "settlingTimeMax": 5, "steadyStateErrorAbsMax": 0.03, "controlSaturationFractionMax": 0.02},
+        }],
         "targets": {"overshootPctMax": 10, "settlingTimeMax": 5, "steadyStateErrorAbsMax": 0.03},
         "ai": {"mode": "none"},
     })
@@ -283,40 +286,32 @@ def start_single_pid_demo():
 def start_buck_dual_loop_demo():
     model_path = base.ROOT / "pid_ai_buck_dual_loop_demo.slx"
     if not model_path.is_file():
-        raise RuntimeError(f"Buck dual-loop Demo model not found: {model_path}")
+        raise RuntimeError(f"Buck 双环示例模型不存在: {model_path}")
     return start_custom_job({
         "modelPath": str(model_path),
         "pidBlocks": [
+            {"name": "voltage", "path": "pid_ai_buck_dual_loop_demo/Outer_Voltage_PI", "bounds": {"Kp": [0.01, 0.15], "Ki": [4, 24], "Kd": [0, 0], "N": [100, 100]}},
+            {"name": "current", "path": "pid_ai_buck_dual_loop_demo/Inner_Current_PI", "bounds": {"Kp": [0.015, 0.08], "Ki": [2, 20], "Kd": [0, 0], "N": [100, 100]}},
+        ],
+        "stopTime": "0.3", "maxIterations": 9, "numCandidates": 10,
+        "stopOnFirstPass": False, "searchStrategy": "cascade",
+        "availableSignalNames": ["r", "y", "iRef", "iL", "u"],
+        "signalMappingConfirmed": True,
+        "evaluationLoops": [
             {
-                "name": "voltage",
-                "path": "pid_ai_buck_dual_loop_demo/Outer_Voltage_PI",
-                "bounds": {"Kp": [0.01, 0.15], "Ki": [4, 24], "Kd": [0, 0], "N": [100, 100]},
+                "name": "voltage", "role": "outer", "pidPath": "pid_ai_buck_dual_loop_demo/Outer_Voltage_PI",
+                "referenceSignalName": "r", "outputSignalName": "y", "controlSignalName": "iRef", "currentSignalName": "iL",
+                "weight": 1, "primary": True, "controlLowerLimit": 0, "controlUpperLimit": 8,
+                "targets": {"overshootPctMax": 12, "settlingTimeMax": 0.27, "steadyStateErrorAbsMax": 0.1, "maxAbsCurrentMax": 8, "outputRippleMax": 0.2, "controlSaturationFractionMax": 0.03},
             },
             {
-                "name": "current",
-                "path": "pid_ai_buck_dual_loop_demo/Inner_Current_PI",
-                "bounds": {"Kp": [0.015, 0.08], "Ki": [2, 20], "Kd": [0, 0], "N": [100, 100]},
+                "name": "current", "role": "inner", "pidPath": "pid_ai_buck_dual_loop_demo/Inner_Current_PI",
+                "referenceSignalName": "iRef", "outputSignalName": "iL", "controlSignalName": "u", "currentSignalName": "iL",
+                "weight": 1, "primary": False, "controlLowerLimit": 0, "controlUpperLimit": 0.95,
+                "targets": {"overshootPctMax": 18, "settlingTimeMax": 0.05, "steadyStateErrorAbsMax": 0.2, "maxAbsCurrentMax": 8, "controlSaturationFractionMax": 0.08},
             },
         ],
-        "referenceSignalName": "r",
-        "outputSignalName": "y",
-        "controlSignalName": "u",
-        "currentSignalName": "iL",
-        "controlUpperLimit": 0.95,
-        "stopTime": "0.3",
-        "maxIterations": 6,
-        "numCandidates": 10,
-        "stopOnFirstPass": False,
-        "targets": {
-            "overshootPctMax": 12,
-            "settlingTimeMax": 0.27,
-            "steadyStateErrorAbsMax": 0.1,
-            "iaeMax": 0.65,
-            "maxAbsControlMax": 0.95,
-            "maxAbsCurrentMax": 6,
-            "outputRippleMax": 0.2,
-            "controlSaturationFractionMax": 0.02,
-        },
+        "targets": {"overshootPctMax": 12, "settlingTimeMax": 0.27, "steadyStateErrorAbsMax": 0.1},
         "ai": {"mode": "none"},
     })
 
@@ -371,12 +366,17 @@ class Handler(base.Handler):
 
     def do_GET(self):
         if urlparse(self.path).path == "/api/health":
+            health = base.matlab_health_snapshot()
             self.send_json({
                 "ok": True,
                 "root": str(base.ROOT),
                 "runsDir": str(base.RUNS),
                 "matlab": str(base.MATLAB),
                 "matlabAvailable": base.MATLAB.is_file(),
+                "matlabReady": bool(health.get("ready")),
+                "matlabProbeError": health.get("error", ""),
+                "matlabCheckedAt": health.get("checkedAt", 0),
+                "serverVersion": base.SERVER_VERSION,
                 "customModelApi": True,
                 "aiModes": ["none", "api", "agent"],
                 "aiPresets": True,
