@@ -57,6 +57,8 @@ end
 
 function testInitialReferenceStepOvershootIsMeasured(testCase)
 cfg = localConfig();
+cfg.pidBlocks = cfg.pidBlocks(2);
+cfg.initialCandidate.pids = cfg.initialCandidate.pids(2);
 cfg.evaluationLoops = cfg.evaluationLoops(2);
 cfg.evaluationLoops(1).role = "single";
 cfg.evaluationLoops(1).primary = true;

@@ -450,11 +450,11 @@ function renderStatus(payload) {
   el('currentSummary').textContent = current ? `${sourceLabel(current)} · 候选 ${value(current.candidateIndex)} / 分数 ${value(current.score)}` : '暂无';
   renderPidRows('currentPidRows', current);
   renderEffectEvaluation(payload);
-  renderLoopMetrics(current);
   renderRecent(payload.recent || []);
   const bestPassing = recordOrNull(payload.bestPassing);
   const bestScored = recordOrNull(payload.best);
   const best = bestPassing || bestScored;
+  renderLoopMetrics(status === 'completed' ? (best || current) : (current || best));
   el('bestKind').textContent = bestPassing ? '已通过最优' : (bestScored ? '当前最低分（未通过全部指标）' : '暂无');
   el('bestScore').textContent = best ? `score=${value(best.score)}` : '暂无';
   renderPidRows('bestPidRows', best);
@@ -580,4 +580,86 @@ function signalOptions(selectedValue = '', optional = false) {
     const selected = name === selectedValue ? ' selected' : '';
     return `<option value="${escapeHtml(name)}"${selected}>${escapeHtml(labelByName.get(name) || name)}</option>`;
   })].join('');
+}
+// Never infer a tuning pair from discovery order. Multi-PID models require an explicit selection.
+async function discoverModel() {
+  if (state.embedded) {
+    setScanState('正在从 Simulink 同步当前模型');
+    sendMatlabEvent('SyncCurrentModel', {});
+    return;
+  }
+  const modelPath = el('modelPathInput').value.trim();
+  const button = el('discoverModelButton');
+  const previousModelPath = String(state.modelInfo?.modelPath || '');
+  const previousPaths = new Set(state.selectedPidIndexes.map((index) => String(state.modelInfo?.pidBlocks?.[index]?.path || '')).filter(Boolean));
+  button.disabled = true;
+  button.textContent = 'MATLAB 读取中...';
+  setScanState('正在启动 MATLAB 并读取模型');
+  try {
+    const payload = await api('/api/pid/models/discover', jsonPost({ modelPath }));
+    payload.pidBlocks = normalizePidBlocks(payload.pidBlocks);
+    payload.loggedSignals = stringArray(payload.loggedSignals);
+    state.modelInfo = payload;
+    const sameModel = previousModelPath && previousModelPath === String(payload.modelPath || '');
+    if (payload.pidBlocks.length === 1) {
+      state.selectedPidIndexes = [0];
+    } else if (sameModel && previousPaths.size) {
+      state.selectedPidIndexes = payload.pidBlocks
+        .map((block, index) => previousPaths.has(String(block.path)) ? index : -1)
+        .filter((index) => index >= 0)
+        .slice(0, 2);
+    } else {
+      state.selectedPidIndexes = [];
+    }
+    renderModelInfo();
+    const action = payload.pidBlocks.length > 1 ? '；请明确选择一个 PID 或一组已确认的内外环' : '';
+    setScanState(`已读取 ${payload.modelName}：发现 ${payload.pidBlocks.length} 个 PID${action}`);
+  } catch (error) {
+    state.modelInfo = null;
+    state.selectedPidIndexes = [];
+    el('modelConfigBody').classList.add('hidden');
+    setScanState(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = '读取模型';
+  }
+}
+
+function applyEmbeddedContext(context) {
+  if (!context || !context.embedded) return;
+  state.embedded = true;
+  state.apiBaseUrl = String(context.apiBaseUrl || 'http://127.0.0.1:8788');
+  state.simulinkContext = context;
+  el('selectModelButton').classList.add('hidden');
+  el('syncSimulinkButton').classList.remove('hidden');
+  el('modelPathInput').readOnly = true;
+  el('modelPathInput').value = context.modelPath || context.modelName || '';
+  el('jobSubtitle').textContent = `Simulink 当前模型 · ${context.modelName || ''}`;
+
+  const info = context.modelInfo || null;
+  if (info) {
+    info.pidBlocks = normalizePidBlocks(info.pidBlocks);
+    info.loggedSignals = stringArray(info.loggedSignals);
+    state.modelInfo = info;
+    const selectedPaths = new Set(stringArray(context.selectedPidPaths));
+    const matched = info.pidBlocks
+      .map((block, index) => selectedPaths.has(String(block.path)) ? index : -1)
+      .filter((index) => index >= 0);
+    if (selectedPaths.size > 2) {
+      state.selectedPidIndexes = [];
+    } else if (matched.length) {
+      state.selectedPidIndexes = matched.slice(0, 2);
+    } else if (!selectedPaths.size && info.pidBlocks.length === 1) {
+      state.selectedPidIndexes = [0];
+    } else {
+      state.selectedPidIndexes = [];
+    }
+    renderModelInfo();
+    let note = '';
+    if (selectedPaths.size > 2) note = '；当前选择超过两个，未自动带入，请重新选择';
+    else if (info.pidBlocks.length > 1 && !state.selectedPidIndexes.length) note = '；请明确选择一个 PID 或一组已确认的内外环';
+    setScanState(`来自 Simulink：发现 ${info.pidBlocks.length} 个 PID${note}`, selectedPaths.size > 2);
+  }
+  if (context.initialView) activateView(context.initialView);
+  refreshJob();
 }

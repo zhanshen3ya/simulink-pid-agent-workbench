@@ -19,8 +19,13 @@ if isempty(pidBlocks)
     end
 end
 
-for idx = 1:numel(pidBlocks)
-    if ~isfield(pidBlocks(idx), "path") || strlength(string(pidBlocks(idx).path)) == 0
+if numel(pidBlocks) > 2
+    error("PIDAgent:TooManyPidBlocks", ...
+        ["A single tuning task supports at most two PID blocks. " ...
+        "Use the PID manager to create sequential tuning units."]);
+end
+
+for idx = 1:numel(pidBlocks)    if ~isfield(pidBlocks(idx), "path") || strlength(string(pidBlocks(idx).path)) == 0
         error("cfg.pidBlocks(%d).path is empty.", idx);
     end
 
@@ -159,8 +164,13 @@ end
 
 function candidate = localCandidateFromPidBlocks(pidBlocks)
 pids = repmat(struct("name", "", "Kp", 0, "Ki", 0, "Kd", 0, "N", 100), numel(pidBlocks), 1);
-for idx = 1:numel(pidBlocks)
-    pids(idx).name = string(pidBlocks(idx).name);
+if numel(pidBlocks) > 2
+    error("PIDAgent:TooManyPidBlocks", ...
+        ["A single tuning task supports at most two PID blocks. " ...
+        "Use the PID manager to create sequential tuning units."]);
+end
+
+for idx = 1:numel(pidBlocks)    pids(idx).name = string(pidBlocks(idx).name);
     pids(idx).Kp = pidBlocks(idx).initialPid.Kp;
     pids(idx).Ki = pidBlocks(idx).initialPid.Ki;
     pids(idx).Kd = pidBlocks(idx).initialPid.Kd;

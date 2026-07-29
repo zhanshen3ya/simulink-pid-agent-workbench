@@ -68,6 +68,12 @@ cfg.referenceSignalName = string(unit.referenceSignalName);
 cfg.outputSignalName = string(unit.outputSignalName);
 cfg.controlSignalName = string(unit.controlSignalName);
 cfg.currentSignalName = string(unit.currentSignalName);
+if isfield(unit, "evaluationLoops") && ~isempty(unit.evaluationLoops)
+    cfg.evaluationLoops = unit.evaluationLoops;
+end
+if isfield(unit, "searchStrategy") && strlength(string(unit.searchStrategy)) > 0
+    cfg.search.strategy = string(unit.searchStrategy);
+end
 cfg.logging.outputDir = fullfile(string(plan.projectRoot), ...
     "pid_tuning_runs", string(plan.planId), string(unit.unitId));
 cfg.logging.runId = string(plan.planId) + "-" + string(unit.unitId);

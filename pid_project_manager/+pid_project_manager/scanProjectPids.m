@@ -21,6 +21,7 @@ for modelIndex = 1:numel(modelNames)
             "Could not load referenced model %s: %s", modelName, exception.message);
         continue;
     end
+    inspection = localInspectModel(modelName);
     blocks = localFindPidBlocks(modelName);
     for blockIndex = 1:numel(blocks)
         discoveryOrder = discoveryOrder + 1;
@@ -43,14 +44,26 @@ for modelIndex = 1:numel(modelNames)
         item.rawPid = params.raw;
         item.parameterSource = localParameterSource(params.raw);
         item.selected = false;
-        item.role = "single";
         item.groupId = "";
         item.order = discoveryOrder;
         item.mode = "single";
-        item.referenceSignalName = "r";
-        item.outputSignalName = "y";
-        item.controlSignalName = "u";
-        item.currentSignalName = "";
+        annotation = localInspectionEntry(inspection, blockPath);
+        if ~isempty(annotation)
+            item.role = string(annotation.suggestedRole);
+            if strlength(item.role) == 0
+                item.role = "single";
+            end
+            item.tuningOrder = double(annotation.tuningOrder);
+            item.cascadePartnerPath = string(annotation.cascadePartnerPath);
+            item.referenceSignalName = string(annotation.signalSuggestion.referenceSignalName);
+            item.outputSignalName = string(annotation.signalSuggestion.outputSignalName);
+            item.controlSignalName = string(annotation.signalSuggestion.controlSignalName);
+            item.currentSignalName = string(annotation.signalSuggestion.currentSignalName);
+            item.signalConfidence = double(annotation.signalSuggestion.confidence);
+            [item.topologyConfidence, item.topologyEvidence] = ...
+                localPairEvidence(inspection, blockPath);
+        end
+        item.primaryEvaluation = item.role == "outer" || item.role == "single";
         item.status = localInitialStatus(item);
         controllers(end + 1, 1) = item; %#ok<AGROW>
     end
@@ -133,8 +146,14 @@ item = struct("controllerId", "", "name", "", "path", "", ...
     "linkStatus", "", "currentPid", emptyPid, "rawPid", emptyRaw, ...
     "parameterSource", emptySource, "selected", false, "role", "single", ...
     "groupId", "", "order", 0, "mode", "single", ...
-    "referenceSignalName", "r", "outputSignalName", "y", ...
-    "controlSignalName", "u", "currentSignalName", "", "status", "ready");
+    "tuningOrder", NaN, "cascadePartnerPath", "", ...
+    "topologyConfidence", 0, "topologyEvidence", "", "signalConfidence", 0, ...
+    "referenceSignalName", "", "outputSignalName", "", ...
+    "controlSignalName", "", "currentSignalName", "", ...
+    "primaryEvaluation", true, "evaluationWeight", 1, ...
+    "controlLowerLimit", NaN, "controlUpperLimit", NaN, ...
+    "overshootPctMax", 10, "settlingTimeMax", 5, ...
+    "steadyStateErrorAbsMax", 0.02, "status", "ready");
 end
 
 function value = localGetParam(blockPath, parameter)
@@ -192,4 +211,48 @@ digest = java.security.MessageDigest.getInstance("SHA-256");
 bytes = digest.digest(uint8(unicode2native(char(value), "UTF-8")));
 hex = lower(reshape(dec2hex(typecast(bytes, "uint8"), 2).', 1, []));
 id = "pid-" + string(hex(1:16));
+end
+function inspection = localInspectModel(modelName)
+inspection = struct();
+source = localModelPath(modelName);
+if strlength(source) == 0
+    source = string(modelName);
+end
+try
+    inspection = pid_tuning_core.inspectPidModel(source);
+catch exception
+    warning("PIDAgent:InspectionFailed", ...
+        "Topology inspection failed for %s: %s", modelName, exception.message);
+end
+end
+
+function annotation = localInspectionEntry(inspection, blockPath)
+annotation = [];
+if ~isstruct(inspection) || ~isfield(inspection, "pidBlocks") || ...
+        isempty(inspection.pidBlocks)
+    return;
+end
+paths = string({inspection.pidBlocks.path});
+index = find(paths == string(blockPath), 1);
+if ~isempty(index)
+    annotation = inspection.pidBlocks(index);
+end
+end
+
+function [confidence, evidence] = localPairEvidence(inspection, blockPath)
+confidence = 0;
+evidence = "";
+if ~isstruct(inspection) || ~isfield(inspection, "cascadePairs") || ...
+        isempty(inspection.cascadePairs)
+    return;
+end
+pairs = inspection.cascadePairs;
+for index = 1:numel(pairs)
+    if string(pairs(index).outerPath) == string(blockPath) || ...
+            string(pairs(index).innerPath) == string(blockPath)
+        confidence = double(pairs(index).confidence);
+        evidence = string(pairs(index).evidence);
+        return;
+    end
+end
 end

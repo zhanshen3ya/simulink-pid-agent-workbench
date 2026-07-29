@@ -37,7 +37,7 @@ classdef PidAgentManagerApp < handle
 
     methods (Access = private)
         function createComponents(app)
-            app.UIFigure = uifigure("Name", "PID Agent Manager", ...
+            app.UIFigure = uifigure("Name", "PID 调参管理器", ...
                 "Position", [120, 120, 1380, 720], ...
                 "CloseRequestFcn", @(~, ~) delete(app));
             root = uigridlayout(app.UIFigure, [4, 1]);
@@ -60,7 +60,7 @@ classdef PidAgentManagerApp < handle
             actions = uigridlayout(root, [1, 12]);
             actions.Layout.Row = 2;
             actions.ColumnWidth = {108, 108, 108, 108, 108, 68, 68, 54, 62, 54, 70, "1x"};
-            uibutton(actions, "Text", "自动分组", ...
+            uibutton(actions, "Text", "按拓扑分组", ...
                 "ButtonPushedFcn", @(~, ~) app.autoGroup());
             uibutton(actions, "Text", "全选可执行", ...
                 "ButtonPushedFcn", @(~, ~) app.selectExecutable());
@@ -84,16 +84,21 @@ classdef PidAgentManagerApp < handle
             app.ControllerTable.Layout.Row = 3;
             app.ControllerTable.ColumnName = {"选择", "系统", "PID", "角色", ...
                 "组", "顺序", "模式", "Kp", "Ki", "Kd", "N", ...
-                "参考", "输出", "控制", "电流", "状态"};
+                "参考", "输出", "控制", "电流", "主评价", "权重", ...
+                "控制下限", "控制上限", "超调上限(%)", "调节时间(s)", ...
+                "稳态误差", "拓扑证据", "状态"};
             app.ControllerTable.ColumnEditable = [true, false, false, true, ...
                 true, true, true, false, false, false, false, true, true, ...
-                true, true, false];
+                true, true, true, true, true, true, true, true, true, false, false];
             app.ControllerTable.ColumnFormat = {'logical', 'char', 'char', ...
-                {'single', 'inner', 'outer'}, 'char', 'numeric', ...
+                {'single', 'inner', 'outer', 'coupled'}, 'char', 'numeric', ...
                 {'single', 'joint'}, 'numeric', 'numeric', 'numeric', ...
-                'numeric', 'char', 'char', 'char', 'char', 'char'};
+                'numeric', 'char', 'char', 'char', 'char', 'logical', ...
+                'numeric', 'numeric', 'numeric', 'numeric', 'numeric', ...
+                'numeric', 'char', 'char'};
             app.ControllerTable.ColumnWidth = {48, 180, 150, 72, 88, 56, 70, ...
-                70, 70, 70, 70, 78, 78, 78, 78, 150};
+                70, 70, 70, 70, 100, 100, 100, 100, 64, 60, 86, 86, 96, ...
+                96, 86, 180, 150};
             app.ControllerTable.CellSelectionCallback = ...
                 @(~, event) app.captureSelection(event);
             app.ControllerTable.CellEditCallback = ...
@@ -126,16 +131,23 @@ classdef PidAgentManagerApp < handle
         function data = catalogTable(app)
             controllers = app.Catalog.controllers;
             count = numel(controllers);
-            data = cell(count, 16);
+            data = cell(count, 24);
             for index = 1:count
                 item = controllers(index);
+                evidence = char(item.topologyEvidence);
+                if strlength(item.cascadePartnerPath) > 0
+                    evidence = char(item.role + " -> " + item.cascadePartnerPath);
+                end
                 data(index, :) = {item.selected, char(item.parentSystem), ...
                     char(item.name), char(item.role), char(item.groupId), ...
                     item.order, char(item.mode), item.currentPid.Kp, ...
                     item.currentPid.Ki, item.currentPid.Kd, item.currentPid.N, ...
                     char(item.referenceSignalName), char(item.outputSignalName), ...
                     char(item.controlSignalName), char(item.currentSignalName), ...
-                    char(item.status)};
+                    item.primaryEvaluation, item.evaluationWeight, ...
+                    item.controlLowerLimit, item.controlUpperLimit, ...
+                    item.overshootPctMax, item.settlingTimeMax, ...
+                    item.steadyStateErrorAbsMax, evidence, char(item.status)};
             end
         end
 
@@ -154,6 +166,13 @@ classdef PidAgentManagerApp < handle
                 app.Catalog.controllers(index).outputSignalName = string(data{index, 13});
                 app.Catalog.controllers(index).controlSignalName = string(data{index, 14});
                 app.Catalog.controllers(index).currentSignalName = string(data{index, 15});
+                app.Catalog.controllers(index).primaryEvaluation = logical(data{index, 16});
+                app.Catalog.controllers(index).evaluationWeight = double(data{index, 17});
+                app.Catalog.controllers(index).controlLowerLimit = double(data{index, 18});
+                app.Catalog.controllers(index).controlUpperLimit = double(data{index, 19});
+                app.Catalog.controllers(index).overshootPctMax = double(data{index, 20});
+                app.Catalog.controllers(index).settlingTimeMax = double(data{index, 21});
+                app.Catalog.controllers(index).steadyStateErrorAbsMax = double(data{index, 22});
             end
             app.Catalog.selectedCount = sum([app.Catalog.controllers.selected]);
         end
@@ -161,33 +180,51 @@ classdef PidAgentManagerApp < handle
         function autoGroup(app)
             app.syncCatalogFromTable();
             controllers = app.Catalog.controllers;
-            parents = unique(string({controllers.parentSystem}), "stable");
+            for index = 1:numel(controllers)
+                controllers(index).groupId = "";
+                controllers(index).mode = "single";
+                controllers(index).selected = false;
+            end
             groupNumber = 0;
-            for parentIndex = 1:numel(parents)
-                indices = find(string({controllers.parentSystem}) == parents(parentIndex));
-                if numel(indices) ~= 2
+            used = false(1, numel(controllers));
+            paths = string({controllers.path});
+            for firstIndex = 1:numel(controllers)
+                if used(firstIndex) || strlength(controllers(firstIndex).cascadePartnerPath) == 0
+                    continue;
+                end
+                secondIndex = find(paths == controllers(firstIndex).cascadePartnerPath, 1);
+                if isempty(secondIndex) || secondIndex == firstIndex || used(secondIndex)
+                    continue;
+                end
+                symmetric = controllers(secondIndex).cascadePartnerPath == controllers(firstIndex).path;
+                roles = lower([string(controllers(firstIndex).role), ...
+                    string(controllers(secondIndex).role)]);
+                if ~symmetric || ~all(ismember(["inner", "outer"], roles))
                     continue;
                 end
                 groupNumber = groupNumber + 1;
-                groupId = "loop-" + compose("%02d", groupNumber);
-                for memberIndex = 1:2
-                    index = indices(memberIndex);
-                    controllers(index).groupId = groupId;
-                    controllers(index).mode = "joint";
-                    controllers(index).selected = true;
-                    name = lower(string(controllers(index).name));
-                    if contains(name, ["outer", "position", "voltage"])
-                        controllers(index).role = "outer";
-                    elseif contains(name, ["inner", "velocity", "current"])
-                        controllers(index).role = "inner";
-                    end
+                groupId = "cascade-" + compose("%02d", groupNumber);
+                pairIndices = [firstIndex, secondIndex];
+                for pairIndex = pairIndices
+                    controllers(pairIndex).groupId = groupId;
+                    controllers(pairIndex).mode = "joint";
+                    controllers(pairIndex).selected = true;
+                    controllers(pairIndex).primaryEvaluation = ...
+                        lower(string(controllers(pairIndex).role)) == "outer";
+
+                    used(pairIndex) = true;
                 end
             end
             app.Catalog.controllers = controllers;
             app.ControllerTable.Data = app.catalogTable();
-            app.setStatus(sprintf("自动建立 %d 个双 PID 组；请核对角色和顺序。", groupNumber));
+            if groupNumber == 0
+                app.setStatus(["没有发现可验证的级联拓扑，未进行自动分组。" ...
+                    "请人工填写组、角色、逐环信号和限幅。"]);
+            else
+                app.setStatus(sprintf(["按信号连接证据建立 %d 个级联组。" ...
+                    "执行前仍需核对逐环信号、限幅和目标。"], groupNumber));
+            end
         end
-
         function selectExecutable(app)
             for index = 1:numel(app.Catalog.controllers)
                 app.Catalog.controllers(index).selected = ...

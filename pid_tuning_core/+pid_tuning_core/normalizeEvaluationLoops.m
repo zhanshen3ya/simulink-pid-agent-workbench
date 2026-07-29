@@ -18,6 +18,16 @@ else
         "primary", true);
 end
 
+if numel(input) > 2
+    error("PIDAgent:TooManyEvaluationLoops", ...
+        "A tuning unit supports at most two evaluation loops.");
+end
+if isfield(cfg, "pidBlocks") && ~isempty(cfg.pidBlocks) && ...
+        numel(input) ~= numel(cfg.pidBlocks)
+    error("PIDAgent:LoopCountMismatch", ...
+        "Define exactly one evaluation loop for each selected PID block.");
+end
+
 loops = repmat(template, numel(input), 1);
 for index = 1:numel(input)
     item = input(index);
@@ -28,9 +38,27 @@ for index = 1:numel(input)
     if strlength(loops(index).role) == 0
         loops(index).role = "single";
     end
+    allowedRoles = ["single", "inner", "outer", "coupled"];
+    if ~any(lower(loops(index).role) == allowedRoles)
+        error("PIDAgent:InvalidLoopRole", ...
+            "Evaluation loop %d has unsupported role '%s'.", index, loops(index).role);
+    end
+    requiredSignals = [loops(index).referenceSignalName, ...
+        loops(index).outputSignalName, loops(index).controlSignalName];
+    if any(strlength(requiredSignals) == 0)
+        error("PIDAgent:MissingEvaluationSignal", ...
+            "Evaluation loop %d requires reference, output, and control signals.", index);
+    end
+    if loops(index).referenceSignalName == loops(index).outputSignalName
+        error("PIDAgent:InvalidEvaluationSignals", ...
+            "Evaluation loop %d cannot use the same reference and output signal.", index);
+    end
     loops(index).targets = localMergeStruct(cfg.targets, localStructField(item, "targets"));
     loops(index).metrics = localMergeStruct(cfg.metrics, localStructField(item, "metrics"));
     loops(index).pidIndex = localPidIndex(cfg, loops(index).pidPath, index);
+    if strlength(loops(index).pidPath) == 0 && loops(index).pidIndex > 0
+        loops(index).pidPath = string(cfg.pidBlocks(loops(index).pidIndex).path);
+    end
 end
 
 enabled = [loops.enabled];
@@ -78,13 +106,20 @@ for field = stringFields
 end
 if isfield(input, "weight")
     value = double(input.weight);
-    if isscalar(value) && isfinite(value) && value > 0
-        output.weight = value;
+    if ~(isscalar(value) && isfinite(value) && value > 0)
+        error("PIDAgent:InvalidLoopWeight", ...
+            "Evaluation loop weight must be a positive finite scalar.");
     end
+    output.weight = value;
 end
 for field = ["enabled", "primary"]
     if isfield(input, field)
-        output.(field) = logical(input.(field));
+        value = input.(field);
+        if ~isscalar(value)
+            error("PIDAgent:InvalidLoopFlag", ...
+                "Evaluation loop %s must be a scalar logical value.", field);
+        end
+        output.(field) = logical(value);
     end
 end
 end
