@@ -63,7 +63,7 @@
               <div class="subpane-title"><h3>PID 控制器</h3><span>选择一个单环 PID，或选择构成同一控制系统的两个 PID</span></div>
               <div class="table-scroll compact">
                 <table class="data-table discovery-table">
-                  <thead><tr><th>选择</th><th>角色建议</th><th>控制器</th><th>块路径</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th><th></th></tr></thead>
+                  <thead><tr><th>选择</th><th>角色建议</th><th>所属系统</th><th>控制器</th><th>块路径</th><th>Kp</th><th>Ki</th><th>Kd</th><th>N</th><th></th></tr></thead>
                   <tbody id="discoveredPidRows"></tbody>
                 </table>
               </div>
@@ -82,7 +82,7 @@
                 </label>
               </div>
               <div id="loopConfigRows" class="loop-config-list"></div>
-              <label class="check-control confirmation-row"><input id="signalMappingConfirmedInput" type="checkbox" /> 我已核对全部环路的参考、反馈、控制量和安全限制</label>
+              <label class="check-control confirmation-row"><input id="signalMappingConfirmedInput" type="checkbox" /> 我已核对双环关系、参考、反馈、控制量和安全限制</label>
               <div class="hidden legacy-signal-fields" aria-hidden="true">
                 <select id="evaluationPidSelect"></select><select id="referenceSignalInput"></select>
                 <select id="outputSignalInput"></select><select id="controlSignalInput"></select>
@@ -125,7 +125,7 @@
 
         <section class="pane">
           <div class="pane-title"><h2>分环评价</h2><span id="effectComparisonSummary">基线、当前候选和当前最佳</span></div>
-          <div class="table-scroll"><table class="data-table effect-table"><thead><tr><th>环路</th><th>角色</th><th>判定</th><th>超调 (%)</th><th>调节时间</th><th>稳态误差</th><th>RMSE</th><th>电流峰值</th><th>纹波</th><th>饱和率</th></tr></thead><tbody id="loopMetricRows"><tr><td colspan="10">暂无结果</td></tr></tbody></table></div>
+          <div class="table-scroll"><table class="data-table effect-table"><thead><tr><th>环路</th><th>角色</th><th>判定</th><th>超调 / 上限</th><th>调节时间 / 上限</th><th>稳态误差 / 上限</th><th>RMSE / 上限</th><th>控制峰值 / 上限</th><th>电流峰值 / 上限</th><th>纹波 / 上限</th><th>饱和率 / 上限</th><th>诊断</th></tr></thead><tbody id="loopMetricRows"><tr><td colspan="12">暂无结果</td></tr></tbody></table></div>
           <div class="hidden"><table><tbody id="effectComparisonRows"></tbody></table></div>
         </section>
 
@@ -162,7 +162,15 @@
             <span id="applyState">只有通过全部硬指标的结果可以写入</span>
           </div>
         </section>
-        <section class="pane"><div class="pane-title"><h2>最终评价</h2><span id="bestScore">暂无</span></div><div class="metrics-list" id="bestMetrics"></div></section>
+        <section class="pane">
+          <div class="pane-title"><h2>最终分环评价</h2><span id="bestScore">暂无</span></div>
+          <div class="table-scroll"><table class="data-table effect-table"><thead><tr><th>环路</th><th>角色</th><th>判定</th><th>超调 / 上限</th><th>调节时间 / 上限</th><th>稳态误差 / 上限</th><th>RMSE / 上限</th><th>控制峰值 / 上限</th><th>电流峰值 / 上限</th><th>纹波 / 上限</th><th>饱和率 / 上限</th><th>诊断</th></tr></thead><tbody id="bestLoopMetricRows"><tr><td colspan="12">暂无最终结果</td></tr></tbody></table></div>
+          <div class="metrics-list" id="bestMetrics"></div>
+        </section>
+        <section class="pane">
+          <div class="pane-title"><h2>分阶段结果</h2><span>级联任务依次检查内环、外环和联合微调</span></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>顺序</th><th>阶段</th><th>调节对象</th><th>判定</th><th>分数</th></tr></thead><tbody id="stageSummaryRows"><tr><td colspan="5">暂无阶段结果</td></tr></tbody></table></div>
+        </section>
       </section>
     </main>
     <footer class="status-bar"><span id="footerStatus">PID Agent 就绪</span><span>本地 MATLAB / Simulink</span></footer>

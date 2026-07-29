@@ -10,11 +10,50 @@ function roleLabel(role) {
   return ({ single: '单环', inner: '内环', outer: '外环', coupled: '耦合环' })[String(role || '').toLowerCase()] || '未指定';
 }
 
-function suggestedRole(block, position, total) {
+function stageLabel(stage) {
+  const key = String(stage || '').toLowerCase();
+  return ({
+    baseline: '基线仿真', joint: '联合调节', 'inner-loop': '内环调节',
+    'outer-loop': '外环调节', 'joint-refine': '联合微调', completed: '已完成',
+  })[key] || String(stage || '-');
+}
+
+function stageRoleLabel(role) {
+  const key = String(role || '').toLowerCase();
+  return ({ inner: '内环 PID', outer: '外环 PID', joint: '全部 PID' })[key] || roleLabel(role);
+}
+
+function statusLabel(status) {
+  const key = String(status || '').toLowerCase();
+  return ({ idle: '空闲', queued: '排队', running: '运行中', completed: '已完成', failed: '失败' })[key] || String(status || '-');
+}
+
+function pidSystem(block) {
+  const parts = String(block?.path || '').split('/').filter(Boolean);
+  const parentParts = parts.slice(0, -1);
+  return {
+    name: parentParts.length ? parentParts[parentParts.length - 1] : '模型根级',
+    path: parentParts.join('/'),
+  };
+}
+
+function loopRelationshipMarkup(blocks, selected) {
+  if (selected.length !== 2) return '';
+  const first = blocks[selected[0]] || {};
+  const second = blocks[selected[1]] || {};
+  const paired = String(first.cascadePartnerPath || '') === String(second.path || '')
+    && String(second.cascadePartnerPath || '') === String(first.path || '');
+  const sameSystem = pidSystem(first).path && pidSystem(first).path === pidSystem(second).path;
+  const kind = paired ? 'confirmed' : (sameSystem ? 'review' : 'warning');
+  const text = paired ? '拓扑连接已确认' : (sameSystem ? '同一子系统，需核对内外环信号' : '跨子系统选择，必须人工确认属于同一控制系统');
+  return `<div class="loop-relationship ${kind}"><strong>双环关系</strong><span>${escapeHtml(text)}</span></div>`;
+}
+
+function suggestedRole(block, total) {
   if (total === 1) return 'single';
   const role = String(block?.suggestedRole || '').toLowerCase();
   if (role === 'inner' || role === 'outer') return role;
-  return position === 0 ? 'outer' : 'inner';
+  return 'coupled';
 }
 
 function loopValue(card, selector, fallback = '') {
@@ -57,8 +96,33 @@ function optionMarkup(values, selected) {
   return values.map(([valueText, label]) => `<option value="${escapeHtml(valueText)}"${valueText === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
 }
 
-function loopSignalSelect(className, valueText, optional = false) {
-  return `<select class="${className}">${signalOptions(valueText, optional)}</select>`;
+function signalOptionsForBlock(block, selectedValue = '', optional = false) {
+  const catalog = normalizeList(state.modelInfo?.loggedSignalCatalog);
+  const duplicateNames = new Set(normalizeList(state.modelInfo?.duplicateLoggedSignalNames).map(String));
+  const systemPath = pidSystem(block).path;
+  const scoped = catalog.filter((item) => {
+    const source = String(item?.sourcePath || '');
+    return systemPath && (source === systemPath || source.startsWith(`${systemPath}/`));
+  });
+  const entries = scoped.length >= 3 ? scoped : catalog;
+  if (!entries.length) return signalOptions(selectedValue, optional);
+  const names = Array.from(new Set(entries.map((item) => String(item?.name || '').trim())
+    .filter((name) => name && !duplicateNames.has(name))));
+  const labelByName = new Map(entries.map((item) => {
+    const name = String(item?.name || '').trim();
+    const source = String(item?.sourcePath || '').trim();
+    return [name, source ? `${name} — ${source}` : name];
+  }));
+  const placeholder = optional ? '不检查' : '请选择已记录的标量信号';
+  return [`<option value="">${placeholder}</option>`, ...names.map((name) => {
+    const selected = name === selectedValue ? ' selected' : '';
+    return `<option value="${escapeHtml(name)}"${selected}>${escapeHtml(labelByName.get(name) || name)}</option>`;
+  })].join('');
+}
+
+function loopSignalSelect(className, valueText, optional = false, block = null) {
+  const options = block ? signalOptionsForBlock(block, valueText, optional) : signalOptions(valueText, optional);
+  return `<select class="${className}">${options}</select>`;
 }
 
 function renderModelInfo() {
@@ -70,13 +134,15 @@ function renderModelInfo() {
     const current = block.currentPid || {};
     const role = String(block.suggestedRole || '').toLowerCase();
     const roleClass = role === 'inner' || role === 'outer' ? role : '';
+    const system = pidSystem(block);
     return `<tr class="${selected ? 'selected' : ''}">
       <td><input class="pid-select" type="checkbox" data-index="${index}" ${selected ? 'checked' : ''}></td>
       <td><span class="role-badge ${roleClass}">${escapeHtml(roleLabel(role))}</span></td>
+      <td title="${escapeHtml(system.path)}">${escapeHtml(system.name)}</td>
       <td>${escapeHtml(block.name)}</td><td title="${escapeHtml(block.path)}">${escapeHtml(block.path)}</td>
       <td>${value(current.Kp)}</td><td>${value(current.Ki)}</td><td>${value(current.Kd)}</td><td>${value(current.N)}</td>
       <td>${state.embedded ? `<button class="pid-locate-button" type="button" data-index="${index}" title="在 Simulink 中定位">定位</button>` : '-'}</td></tr>`;
-  }).join('') : '<tr><td colspan="9">未发现可调 PID Controller 块</td></tr>';
+  }).join('') : '<tr><td colspan="10">未发现可调 PID Controller 块</td></tr>';
   document.querySelectorAll('.pid-select').forEach((checkbox) => checkbox.addEventListener('change', togglePidSelection));
   document.querySelectorAll('.pid-locate-button').forEach((button) => button.addEventListener('click', locatePidFromTable));
   renderPidEditors();
@@ -121,11 +187,11 @@ function renderSignalMapping() {
   };
   const primaryPath = selected.map((index) => blocks[index]).find((block) => String(block?.suggestedRole || '').toLowerCase() === 'outer')?.path || blocks[selected[0]]?.path;
 
-  el('loopConfigRows').innerHTML = selected.map((index, position) => {
+  const loopCards = selected.map((index, position) => {
     const block = blocks[index] || {};
     const suggestion = block.signalSuggestion || {};
     const previous = saved[String(block.path)] || {};
-    const role = previous.role || suggestedRole(block, position, total);
+    const role = previous.role || suggestedRole(block, total);
     const reference = previous.reference || validSuggestedSignal(suggestion.referenceSignalName);
     const output = previous.output || validSuggestedSignal(suggestion.outputSignalName);
     const control = previous.control || validSuggestedSignal(suggestion.controlSignalName);
@@ -142,10 +208,10 @@ function renderSignalMapping() {
         <label><input class="loop-primary" name="primary-loop" type="radio" ${primary ? 'checked' : ''}>主评价环</label>
         <button class="loop-suggest" type="button">应用拓扑建议</button></div>
       <div class="loop-fields">
-        <label><span>参考值</span>${loopSignalSelect('loop-reference', reference)}</label>
-        <label><span>反馈 / 输出</span>${loopSignalSelect('loop-output', output)}</label>
-        <label><span>控制输出</span>${loopSignalSelect('loop-control', control)}</label>
-        <label><span>电流保护信号</span>${loopSignalSelect('loop-current', current, true)}</label>
+        <label><span>参考值</span>${loopSignalSelect('loop-reference', reference, false, block)}</label>
+        <label><span>反馈 / 输出</span>${loopSignalSelect('loop-output', output, false, block)}</label>
+        <label><span>控制输出</span>${loopSignalSelect('loop-control', control, false, block)}</label>
+        <label><span>电流保护信号</span>${loopSignalSelect('loop-current', current, true, block)}</label>
       </div>
       <div class="loop-targets">
         <label><span>权重</span><input class="loop-weight" type="number" min="0.000001" step="any" value="${escapeHtml(previous.weight || '1')}"></label>
@@ -161,7 +227,9 @@ function renderSignalMapping() {
       </div>
       <div class="loop-status"><span>${escapeHtml(confidenceText)}</span><span class="loop-validity invalid">待核对</span></div>
     </section>`;
-  }).join('') || '<div class="warn">选择 PID 后配置对应评价环路。</div>';
+  }).join('');
+  el('loopConfigRows').innerHTML = loopRelationshipMarkup(blocks, selected)
+    + (loopCards || '<div class="warn">选择 PID 后配置对应评价环路。</div>');
   state.signalMappingModelKey = String(state.modelInfo?.modelPath || state.modelInfo?.modelName || '');
   updateLoopValidity();
 }
@@ -347,21 +415,59 @@ function loopValidationMap(record) {
   return result;
 }
 
-function renderLoopMetrics(record) {
+function loopDefinition(item, index) {
+  const loops = normalizeList(state.status?.evaluationLoops);
+  return loops.find((loop) => String(loop.name || '') === String(item?.name || '')) || loops[index] || {};
+}
+
+function metricWithTarget(item, index, metricName, targetName) {
+  const actual = metricValue(item, metricName);
+  const definition = loopDefinition(item, index);
+  const rawTarget = definition?.targets?.[targetName];
+  const target = Number(rawTarget);
+  return rawTarget !== null && rawTarget !== undefined && rawTarget !== '' && Number.isFinite(target)
+    ? `${actual} / ${fmt.format(target)}` : `${actual} / 未设置`;
+}
+
+function loopDiagnostic(item) {
+  const message = String(item?.error || '').trim();
+  if (!message) return '-';
+  const missing = message.match(/Signal '([^']+)' was not found/i);
+  if (missing) return `未读取到评价信号：${missing[1]}`;
+  return message;
+}
+
+function renderLoopMetrics(record, targetId = 'loopMetricRows') {
+  const target = el(targetId);
+  if (!target) return;
   const metrics = normalizeList(record?.metrics?.loopMetrics);
   const validations = normalizeList(record?.loopValidations);
-  el('loopMetricRows').innerHTML = metrics.length ? metrics.map((item, index) => {
+  target.innerHTML = metrics.length ? metrics.map((item, index) => {
     const validation = validations.find((candidate) => String(candidate.name || '') === String(item.name || '')) || validations[index];
     const passed = validation ? Boolean(validation.passed) : Boolean(item.isStable && item.isFinite && item.simulationSuccess);
     return `<tr><td>${escapeHtml(value(item.name, `环路 ${index + 1}`))}</td><td>${escapeHtml(roleLabel(item.role))}</td>
       <td>${passed ? '<span class="pass">通过</span>' : '<span class="fail">未通过</span>'}</td>
-      <td>${metricValue(item, 'overshootPct')}</td><td>${metricValue(item, 'settlingTime')}</td>
-      <td>${metricValue(item, 'steadyStateError')}</td><td>${metricValue(item, 'trackingRmse')}</td>
-      <td>${metricValue(item, 'maxAbsCurrent')}</td><td>${metricValue(item, 'outputRipple')}</td>
-      <td>${metricValue(item, 'controlSaturationFraction')}</td></tr>`;
-  }).join('') : '<tr><td colspan="10">暂无分环评价结果</td></tr>';
+      <td>${metricWithTarget(item, index, 'overshootPct', 'overshootPctMax')}</td>
+      <td>${metricWithTarget(item, index, 'settlingTime', 'settlingTimeMax')}</td>
+      <td>${metricWithTarget(item, index, 'steadyStateError', 'steadyStateErrorAbsMax')}</td>
+      <td>${metricWithTarget(item, index, 'trackingRmse', 'trackingRmseMax')}</td>
+      <td>${metricWithTarget(item, index, 'maxAbsControl', 'maxAbsControlMax')}</td>
+      <td>${metricWithTarget(item, index, 'maxAbsCurrent', 'maxAbsCurrentMax')}</td>
+      <td>${metricWithTarget(item, index, 'outputRipple', 'outputRippleMax')}</td>
+      <td>${metricWithTarget(item, index, 'controlSaturationFraction', 'controlSaturationFractionMax')}</td>
+      <td title="${escapeHtml(loopDiagnostic(item))}">${escapeHtml(loopDiagnostic(item))}</td></tr>`;
+  }).join('') : '<tr><td colspan="12">暂无分环评价结果</td></tr>';
 }
 
+function renderStageSummaries(payload) {
+  const target = el('stageSummaryRows');
+  if (!target) return;
+  const rows = normalizeList(payload?.stageSummaries).filter((item) => String(item?.name || '').trim());
+  target.innerHTML = rows.length ? rows.map((item, index) => `<tr>
+    <td>${index + 1}</td><td>${escapeHtml(stageLabel(item.name))}</td>
+    <td>${escapeHtml(stageRoleLabel(item.role))}</td><td>${item.passed ? '<span class="pass">通过</span>' : '<span class="fail">未通过</span>'}</td>
+    <td>${value(item.score)}</td></tr>`).join('') : '<tr><td colspan="5">暂无阶段结果</td></tr>';
+}
 function drawScoreTrend(history) {
   const canvas = el('scoreTrendCanvas');
   if (!canvas) return;
@@ -378,43 +484,48 @@ function drawScoreTrend(history) {
     x: index, y: Number(record.score), stage: String(record.stage || ''), passed: Boolean(record.passed),
   })).filter((point) => Number.isFinite(point.y));
   context.strokeStyle = '#c7c7c7'; context.lineWidth = 1;
-  context.beginPath(); context.moveTo(44, 12); context.lineTo(44, 154); context.lineTo(width - 12, 154); context.stroke();
+  context.beginPath(); context.moveTo(50, 12); context.lineTo(50, 154); context.lineTo(width - 12, 154); context.stroke();
   if (!points.length) {
-    context.fillStyle = '#666'; context.font = '12px Segoe UI'; context.fillText('暂无候选分数', 54, 84); return;
+    context.fillStyle = '#666'; context.font = '12px Segoe UI'; context.fillText('暂无候选分数', 60, 84); return;
   }
-  const values = points.map((point) => point.y);
-  let min = Math.min(...values), max = Math.max(...values);
-  if (max <= min) { max = min + 1; }
-  const xScale = (width - 64) / Math.max(1, points.length - 1);
-  const yScale = (154 - 14) / (max - min);
+  const rawValues = points.map((point) => point.y);
+  const rawMin = Math.min(...rawValues), rawMax = Math.max(...rawValues);
+  const smallestPositive = Math.min(...rawValues.filter((number) => number > 0));
+  const useLog = rawMin >= 0 && (rawMax > 1e6 || (Number.isFinite(smallestPositive) && rawMax / smallestPositive > 100));
+  const plotted = points.map((point) => ({ ...point, plotY: useLog ? Math.log10(1 + point.y) : point.y }));
+  const plotValues = plotted.map((point) => point.plotY);
+  let plotMin = Math.min(...plotValues), plotMax = Math.max(...plotValues);
+  if (plotMax <= plotMin) plotMax = plotMin + 1;
+  const xScale = (width - 72) / Math.max(1, plotted.length - 1);
+  const yScale = (154 - 14) / (plotMax - plotMin);
   context.fillStyle = '#555'; context.font = '11px Segoe UI';
-  context.fillText(fmt.format(max), 4, 17); context.fillText(fmt.format(min), 4, 154);
+  context.fillText(fmt.format(rawMax), 3, 17); context.fillText(fmt.format(rawMin), 3, 154);
+  if (useLog) context.fillText('对数刻度', 56, 17);
   context.strokeStyle = '#0072bd'; context.lineWidth = 1.6; context.beginPath();
-  points.forEach((point, index) => {
-    const x = 44 + index * xScale, y = 154 - (point.y - min) * yScale;
+  plotted.forEach((point, index) => {
+    const x = 50 + index * xScale, y = 154 - (point.plotY - plotMin) * yScale;
     if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
   });
   context.stroke();
-  points.forEach((point, index) => {
-    const x = 44 + index * xScale, y = 154 - (point.y - min) * yScale;
+  plotted.forEach((point, index) => {
+    const x = 50 + index * xScale, y = 154 - (point.plotY - plotMin) * yScale;
     context.fillStyle = point.passed ? '#2e7d32' : '#0072bd'; context.beginPath(); context.arc(x, y, point.passed ? 3 : 2, 0, Math.PI * 2); context.fill();
-    if (index > 0 && point.stage !== points[index - 1].stage) {
+    if (index > 0 && point.stage !== plotted[index - 1].stage) {
       context.strokeStyle = '#888'; context.setLineDash([3, 3]); context.beginPath(); context.moveTo(x, 14); context.lineTo(x, 154); context.stroke(); context.setLineDash([]);
     }
   });
 }
-
 function stageText(payload) {
   const name = String(payload.currentStage || payload.current?.stage || '').trim();
   const index = Number(payload.stageIndex || 0), count = Number(payload.stageCount || 0);
   if (!name) return '--';
-  return count > 0 ? `${index}/${count} ${name}` : name;
+  return count > 0 ? `${index}/${count} ${stageLabel(name)}` : stageLabel(name);
 }
 
 function renderRecent(records) {
   const rows = normalizeList(records);
   el('recentRows').innerHTML = rows.length ? rows.map((record, index) => `
-    <tr><td>${value(record.globalIndex, index + 1)}</td><td>${escapeHtml(value(record.stage, '-'))}</td><td>${value(record.iteration)}</td>
+    <tr><td>${value(record.globalIndex, index + 1)}</td><td>${escapeHtml(stageLabel(record.stage))}</td><td>${value(record.iteration)}</td>
     <td>${value(record.candidateIndex)}</td><td>${sourceHtml(record)}</td><td>${passText(record)}</td>
     <td>${metricValue(pickMetrics(record), 'overshootPct')}</td><td>${metricValue(pickMetrics(record), 'settlingTime')}</td>
     <td>${metricValue(pickMetrics(record), 'steadyStateError')}</td><td>${value(record.score)}</td></tr>`).join('') : '<tr><td colspan="10">暂无候选记录</td></tr>';
@@ -425,7 +536,7 @@ function renderHistory(rows) {
   el('historyCount').textContent = `${data.length} 条`;
   el('historyRows').innerHTML = data.length ? data.map((record, index) => {
     const summary = escapeHtml(pidSummary(record));
-    return `<tr><td>${value(record.globalIndex, index + 1)}</td><td>${escapeHtml(value(record.timestamp))}</td><td>${escapeHtml(value(record.stage, '-'))}</td>
+    return `<tr><td>${value(record.globalIndex, index + 1)}</td><td>${escapeHtml(value(record.timestamp))}</td><td>${escapeHtml(stageLabel(record.stage))}</td>
       <td>${value(record.iteration)}</td><td>${value(record.candidateIndex)}</td><td>${sourceHtml(record)}</td><td title="${summary}">${summary}</td>
       <td>${passText(record)}</td><td>${escapeHtml(failureText(record))}</td><td>${metricValue(pickMetrics(record), 'overshootPct')}</td>
       <td>${metricValue(pickMetrics(record), 'settlingTime')}</td><td>${metricValue(pickMetrics(record), 'steadyStateError')}</td><td>${value(record.score)}</td></tr>`;
@@ -444,7 +555,7 @@ function renderStatus(payload) {
   el('passedText').textContent = value(payload.passedCount, 0);
   el('stageText').textContent = stageText(payload);
   const status = value(payload.status, 'idle').toLowerCase();
-  el('statusPill').textContent = status;
+  el('statusPill').textContent = statusLabel(status);
   el('statusPill').className = `status-pill ${status}`;
   const current = recordOrNull(payload.current);
   el('currentSummary').textContent = current ? `${sourceLabel(current)} · 候选 ${value(current.candidateIndex)} / 分数 ${value(current.score)}` : '暂无';
@@ -455,13 +566,19 @@ function renderStatus(payload) {
   const bestScored = recordOrNull(payload.best);
   const best = bestPassing || bestScored;
   renderLoopMetrics(status === 'completed' ? (best || current) : (current || best));
+  renderLoopMetrics(best, 'bestLoopMetricRows');
+  renderStageSummaries(payload);
   el('bestKind').textContent = bestPassing ? '已通过最优' : (bestScored ? '当前最低分（未通过全部指标）' : '暂无');
   el('bestScore').textContent = best ? `score=${value(best.score)}` : '暂无';
   renderPidRows('bestPidRows', best);
   el('bestMetrics').innerHTML = metricRows(pickMetrics(best));
-  el('applyBestButton').disabled = !bestPassing || Boolean(payload.resultApplied);
+  const canApply = status === 'completed' && Boolean(bestPassing) && !Boolean(payload.resultApplied);
+  el('applyBestButton').disabled = !canApply;
   el('rollbackBestButton').disabled = !Boolean(payload.rollbackAvailable || payload.resultApplied);
-  el('applyState').textContent = payload.resultApplied ? '参数已写入模型，可回滚' : (bestPassing ? '结果已通过全部环路硬指标，可以写入' : '只有通过全部硬指标的结果可以写入');
+  el('applyState').textContent = payload.resultApplied
+    ? '参数已写入模型，可回滚'
+    : (status !== 'completed' ? '任务完成且最终阶段全部环路通过后才能写入'
+      : (bestPassing ? '最终结果已通过全部环路硬指标，可以写入' : '只有通过全部硬指标的最终结果可以写入'));
   drawScoreTrend(state.history);
 }
 
@@ -471,7 +588,10 @@ async function refreshHealth() {
     state.health = payload;
     const ready = payload.matlabReady ?? payload.matlabAvailable;
     el('serverVersion').textContent = payload.serverVersion || '--';
-    el('connectionState').textContent = ready ? 'MATLAB 可用' : `网关已连接，MATLAB 未就绪${payload.matlabProbeError ? '：' + payload.matlabProbeError : ''}`;
+    const connection = el('connectionState');
+    connection.textContent = ready ? 'MATLAB 可用'
+      : (payload.matlabAvailable ? '网关已连接，MATLAB 检查未通过' : '网关已连接，未找到 MATLAB');
+    connection.title = payload.matlabProbeError || '';
     sendMatlabEvent('GatewayStatus', { ok: true, matlabAvailable: Boolean(ready), error: payload.matlabProbeError || '' });
     return true;
   } catch (error) {
@@ -481,25 +601,48 @@ async function refreshHealth() {
   }
 }
 
+function normalizedModelPath(valueText) {
+  return String(valueText || '').trim().replaceAll('/', '\\').toLowerCase();
+}
+
+function jobMatchesPreferredModel(job) {
+  const preferredPath = normalizedModelPath(state.preferredModelPath);
+  const jobPath = normalizedModelPath(job?.modelPath);
+  if (preferredPath) return Boolean(jobPath) && jobPath === preferredPath;
+  const preferredName = String(state.preferredModelName || '').trim().toLowerCase();
+  const jobName = String(job?.modelName || '').trim().toLowerCase();
+  return Boolean(preferredName) && jobName === preferredName;
+}
+
 async function chooseLatestJob() {
   const payload = await api('/api/pid/jobs');
   const jobs = normalizeList(payload.jobs);
   const selector = el('jobSelectInput');
   const current = state.activeJobId || selector.value;
-  selector.innerHTML = jobs.map((job) => `<option value="${escapeHtml(job.jobId)}">${escapeHtml(job.updatedAt || '')} · ${escapeHtml(job.modelName || job.jobId)} · ${escapeHtml(job.status || '')}</option>`).join('');
-  if (jobs.some((job) => job.jobId === current)) state.activeJobId = current;
-  else state.activeJobId = jobs[0]?.jobId || null;
+  selector.innerHTML = jobs.map((job) => `<option value="${escapeHtml(job.jobId)}">${escapeHtml(job.updatedAt || '')} · ${escapeHtml(job.modelName || job.jobId)} · ${escapeHtml(statusLabel(job.status))}</option>`).join('');
+  const currentJob = jobs.find((job) => job.jobId === current);
+  if (currentJob && (!state.enforceModelMatch || jobMatchesPreferredModel(currentJob))) {
+    state.activeJobId = current;
+  } else {
+    const matching = jobs.find(jobMatchesPreferredModel);
+    state.activeJobId = matching?.jobId || (state.enforceModelMatch ? null : (jobs[0]?.jobId || null));
+  }
   if (state.activeJobId) selector.value = state.activeJobId;
+  else selector.selectedIndex = -1;
   return jobs;
 }
-
 async function refreshJob() {
   if (state.refreshing) return;
   state.refreshing = true;
   try {
     if (!(await refreshHealth())) return;
     await chooseLatestJob();
-    if (!state.activeJobId) return;
+    if (!state.activeJobId) {
+      renderStatus({ status: 'idle', modelName: state.preferredModelName || '', current: null, best: null, bestPassing: null });
+      state.history = [];
+      renderHistory([]);
+      return;
+    }
     const payload = await api(`/api/pid/jobs/${encodeURIComponent(state.activeJobId)}`);
     renderStatus(payload);
     const historyPayload = await api(`/api/pid/jobs/${encodeURIComponent(state.activeJobId)}/history`);
@@ -548,12 +691,14 @@ function bindPidAgentV2() {
   });
   container.addEventListener('change', markSignalMappingChanged);
   el('searchStrategyInput').addEventListener('change', markSignalMappingChanged);
-  el('jobSelectInput').addEventListener('change', () => { state.activeJobId = el('jobSelectInput').value || null; refreshJob(); });
+  el('jobSelectInput').addEventListener('change', () => { state.enforceModelMatch = false; state.activeJobId = el('jobSelectInput').value || null; refreshJob(); });
   el('refreshHistoryButton').addEventListener('click', refreshJob);
   el('applyBestButton').addEventListener('click', applyBestResult);
   el('rollbackBestButton').addEventListener('click', rollbackBestResult);
   window.addEventListener('resize', () => drawScoreTrend(state.history));
   renderLoopMetrics(null);
+  renderLoopMetrics(null, 'bestLoopMetricRows');
+  renderStageSummaries({});
   drawScoreTrend([]);
 }
 
@@ -601,6 +746,10 @@ async function discoverModel() {
     payload.pidBlocks = normalizePidBlocks(payload.pidBlocks);
     payload.loggedSignals = stringArray(payload.loggedSignals);
     state.modelInfo = payload;
+    state.preferredModelPath = String(payload.modelPath || '');
+    state.preferredModelName = String(payload.modelName || '');
+    state.enforceModelMatch = true;
+    state.activeJobId = null;
     const sameModel = previousModelPath && previousModelPath === String(payload.modelPath || '');
     if (payload.pidBlocks.length === 1) {
       state.selectedPidIndexes = [0];
@@ -615,6 +764,7 @@ async function discoverModel() {
     renderModelInfo();
     const action = payload.pidBlocks.length > 1 ? '；请明确选择一个 PID 或一组已确认的内外环' : '';
     setScanState(`已读取 ${payload.modelName}：发现 ${payload.pidBlocks.length} 个 PID${action}`);
+    await refreshJob();
   } catch (error) {
     state.modelInfo = null;
     state.selectedPidIndexes = [];
@@ -642,6 +792,10 @@ function applyEmbeddedContext(context) {
     info.pidBlocks = normalizePidBlocks(info.pidBlocks);
     info.loggedSignals = stringArray(info.loggedSignals);
     state.modelInfo = info;
+    state.preferredModelPath = String(info.modelPath || context.modelPath || '');
+    state.preferredModelName = String(info.modelName || context.modelName || '');
+    state.enforceModelMatch = true;
+    state.activeJobId = null;
     const selectedPaths = new Set(stringArray(context.selectedPidPaths));
     const matched = info.pidBlocks
       .map((block, index) => selectedPaths.has(String(block.path)) ? index : -1)

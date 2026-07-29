@@ -182,6 +182,24 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
                 server_custom.REQUEST_LOG = original_log
+    def test_apply_rejects_running_stage_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            job = run_root / "running-job"
+            job.mkdir()
+            (job / "current_status.json").write_text(
+                json.dumps({"status": "running", "modelName": "demo"}),
+                encoding="utf-8",
+            )
+            original_runs = server_custom.RUNS
+            try:
+                server_custom.RUNS = run_root
+                with self.assertRaises(server_custom.RequestValidationError) as raised:
+                    server_custom.apply_job_result("running-job")
+            finally:
+                server_custom.RUNS = original_runs
+            self.assertEqual(raised.exception.code, "JOB_NOT_COMPLETED")
+
     def test_job_list_ignores_incomplete_run_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory)
@@ -192,6 +210,10 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 json.dumps({"status": "completed", "modelName": "demo"}),
                 encoding="utf-8",
             )
+            (complete / "request_config.json").write_text(
+                json.dumps({"modelPath": r"D:\models\demo.slx"}),
+                encoding="utf-8",
+            )
             original_runs = server_custom.RUNS
             try:
                 server_custom.RUNS = run_root
@@ -200,6 +222,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 server_custom.RUNS = original_runs
 
             self.assertEqual([job["jobId"] for job in jobs], ["complete"])
+            self.assertEqual(jobs[0]["modelPath"], r"D:\models\demo.slx")
 
     def test_toolstrip_commands_and_uihtml_bridge_are_packaged(self):
         json_root = ROOT / "resources" / "json"
@@ -242,9 +265,17 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn('id="effectComparisonRows"', html)
         self.assertIn('id="evaluationPidSelect"', html)
         self.assertIn('id="signalMappingConfirmedInput"', html)
+        self.assertIn('id="bestLoopMetricRows"', html)
+        self.assertIn('id="stageSummaryRows"', html)
+        self.assertIn('<th>诊断</th>', html)
+        self.assertIn('<th>所属系统</th>', html)
+        self.assertIn('我已核对双环关系', html)
 
+        styles = (ROOT / "local_pid_gateway" / "web" / "styles_custom.css").read_text(encoding="utf-8")
         app_js = (ROOT / "local_pid_gateway" / "web" / "app_custom.js").read_text(encoding="utf-8")
         app_v2_js = (ROOT / "local_pid_gateway" / "web" / "app_custom_v2.js").read_text(encoding="utf-8")
+        self.assertIn("button.primary-button:disabled", styles)
+        self.assertIn(".loop-relationship.warning", styles)
         self.assertIn("renderEffectEvaluation({})", app_js)
         self.assertIn("apiViaMatlab(path, options)", app_js)
         self.assertIn("sendMatlabEvent('GatewayRequest'", app_js)
@@ -254,7 +285,19 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("apiErrorText(error, '启动')", app_js)
         self.assertNotIn("el('currentMetrics')", app_js)
         self.assertIn("Multi-PID models require an explicit selection", app_v2_js)
+        self.assertIn("return 'coupled';", app_v2_js)
+        self.assertNotIn("position === 0 ? 'outer' : 'inner'", app_v2_js)
         self.assertIn("async function startBuckDemo()", app_v2_js)
+        self.assertIn("status === 'completed' && Boolean(bestPassing)", app_v2_js)
+        self.assertIn("function renderStageSummaries", app_v2_js)
+        self.assertIn("function loopDiagnostic", app_v2_js)
+        self.assertIn("function normalizedModelPath", app_v2_js)
+        self.assertIn("function loopRelationshipMarkup", app_v2_js)
+        self.assertIn("function pidSystem", app_v2_js)
+        self.assertIn("function signalOptionsForBlock", app_v2_js)
+        self.assertIn("scoped.length >= 3", app_v2_js)
+        self.assertIn("function jobMatchesPreferredModel", app_v2_js)
+        self.assertIn("state.enforceModelMatch = true", app_v2_js)
         self.assertNotIn("/api/pid/jobs/demo/buck", app_v2_js)
 
         matlab_app = (ROOT / "+pid_agent_ui" / "PidAgentWebApp.m").read_text(encoding="utf-8")
@@ -264,6 +307,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("performModelAction", matlab_app)
         self.assertIn("applyPidCandidateToModel", matlab_app)
         self.assertIn("modelFingerprint", matlab_app)
+        self.assertIn("PIDAgent:JobNotCompleted", matlab_app)
         preflight = (ROOT / "run_pid_tuning_from_json.m").read_text(encoding="utf-8")
         self.assertIn("localValidateModelMapping", preflight)
         self.assertIn("PIDAgent:SignalNotLogged", preflight)

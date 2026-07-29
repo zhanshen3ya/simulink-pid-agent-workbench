@@ -306,20 +306,59 @@ for outerIndex = 1:numel(blocks)
         pairs(end + 1, 1) = pair; %#ok<AGROW>
     end
 end
-if ~isempty(pairs)
-    return;
+% Name evidence is only a fallback and never overwrites topology evidence.
+for index = 1:numel(blocks)
+    if strlength(string(blocks(index).suggestedRole)) > 0
+        continue;
+    end
+    [role, order] = localRoleFromPath(blocks(index).name, blocks(index).path);
+    blocks(index).suggestedRole = role;
+    blocks(index).tuningOrder = order;
+end
 end
 
-% Name evidence is only a fallback and never marks a pair as high confidence.
-for index = 1:numel(blocks)
-    descriptor = lower(string(blocks(index).name) + " " + string(blocks(index).path));
-    if any(contains(descriptor, ["inner", "current", "电流"]))
-        blocks(index).suggestedRole = "inner";
-        blocks(index).tuningOrder = 1;
-    elseif any(contains(descriptor, ["outer", "voltage", "position", "电压", "外环"]))
-        blocks(index).suggestedRole = "outer";
-        blocks(index).tuningOrder = 2;
+function [role, order] = localRoleFromPath(blockName, blockPath)
+role = "";
+order = NaN;
+segments = flip(split(string(blockPath), "/"));
+if strlength(string(blockName)) > 0
+    segments = [string(blockName); segments(:)];
+end
+for index = 1:numel(segments)
+    role = localRoleFromDescriptor(segments(index));
+    if role == "inner"
+        order = 1;
+        return;
+    elseif role == "outer"
+        order = 2;
+        return;
     end
+end
+end
+
+function role = localRoleFromDescriptor(value)
+descriptor = lower(string(value));
+explicitInner = any(contains(descriptor, ["inner", "内环"]));
+explicitOuter = any(contains(descriptor, ["outer", "外环"]));
+if explicitInner ~= explicitOuter
+    if explicitInner
+        role = "inner";
+    else
+        role = "outer";
+    end
+    return;
+end
+innerDomain = any(contains(descriptor, ["current", "torque", "电流", "转矩"]));
+outerDomain = any(contains(descriptor, ["voltage", "position", "speed", ...
+    "电压", "位置", "速度"]));
+if innerDomain ~= outerDomain
+    if innerDomain
+        role = "inner";
+    else
+        role = "outer";
+    end
+else
+    role = "";
 end
 end
 function [names, catalog, duplicateNames] = localLoggedSignals(modelName)

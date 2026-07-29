@@ -168,6 +168,16 @@ classdef PidAgentWebApp < handle
                         error("PIDAgent:AlreadyApplied", ...
                             "This result is already applied. Roll it back before applying again.");
                     end
+                    statusPath = fullfile(runDir, "current_status.json");
+                    if ~isfile(statusPath)
+                        error("PIDAgent:JobNotCompleted", ...
+                            "Tuning status is missing; parameters cannot be applied.");
+                    end
+                    jobStatus = jsondecode(fileread(statusPath));
+                    if ~isfield(jobStatus, "status") || string(jobStatus.status) ~= "completed"
+                        error("PIDAgent:JobNotCompleted", ...
+                            "The tuning task is not complete; stage results cannot be applied.");
+                    end
                     configPath = fullfile(runDir, "request_config.json");
                     resultPath = fullfile(runDir, "best_result.json");
                     if ~isfile(configPath) || ~isfile(resultPath)

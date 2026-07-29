@@ -199,10 +199,12 @@ def list_jobs():
         status = read_json(path / "current_status.json")
         if not isinstance(status, dict):
             continue
+        request_config = read_json(path / "request_config.json") or {}
         jobs.append({
             "jobId": path.name,
             "status": status.get("status", "unknown"),
             "modelName": status.get("modelName", ""),
+            "modelPath": request_config.get("modelPath", ""),
             "updatedAt": status.get("updatedAt", ""),
             "runDir": str(path),
         })
@@ -783,6 +785,11 @@ def run_matlab_action(payload, run_dir, timeout=180):
 
 def apply_job_result(job_id):
     run_dir = RUNS / job_id
+    status = read_status(job_id)
+    if not isinstance(status, dict) or status.get("status") != "completed":
+        raise RequestValidationError(
+            "调参任务尚未完成，不能写入阶段性参数。", "JOB_NOT_COMPLETED"
+        )
     request_config = read_json(run_dir / "request_config.json")
     best_result = read_json(run_dir / "best_result.json")
     if not isinstance(request_config, dict) or not isinstance(best_result, dict):

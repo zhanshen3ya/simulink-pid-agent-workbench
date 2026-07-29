@@ -57,6 +57,20 @@ verifyTrue(testCase, all(arrayfun(@(item) ...
     all(isfield(item.parameters, ["P", "I", "D"])), result.controllers)));
 end
 
+function testMultiSystemRoleSuggestionsPreferNearestBlockName(testCase)
+modelPath = fullfile(testCase.TestData.Root, "pid_ai_multi_system_demo.slx");
+verifyTrue(testCase, isfile(modelPath));
+info = pid_tuning_core.inspectPidModel(modelPath);
+paths = string({info.pidBlocks.path});
+roles = string({info.pidBlocks.suggestedRole});
+innerMask = endsWith(paths, "/Inner PID");
+outerMask = endsWith(paths, "/Outer PID");
+verifyEqual(testCase, nnz(innerMask), 2);
+verifyEqual(testCase, nnz(outerMask), 2);
+verifyEqual(testCase, roles(innerMask), repmat("inner", 1, nnz(innerMask)));
+verifyEqual(testCase, roles(outerMask), repmat("outer", 1, nnz(outerMask)));
+end
+
 function testJsonScanBridge(testCase)
 requestPath = string(tempname) + ".json";
 outputPath = string(tempname) + ".json";

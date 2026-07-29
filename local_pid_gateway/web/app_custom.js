@@ -102,7 +102,18 @@ const FAILURE_LABELS = {
   max_abs_current: '电流峰值超限',
   output_ripple: '输出纹波超限',
   control_saturation: '控制饱和时间超限',
+  tracking_rmse: '跟踪 RMSE 超限',
+  disturbance_peak: '扰动峰值超限',
 };
+
+function failureLabel(failure) {
+  const text = String(failure || '');
+  const parts = text.split(':');
+  const code = parts[parts.length - 1];
+  const label = FAILURE_LABELS[code] || code.replaceAll('_', ' ');
+  if (parts[0] === 'loop' && parts.length >= 3) return `${parts[1]}：${label}`;
+  return FAILURE_LABELS[text] || label || text;
+}
 
 function finiteMetric(record, definition) {
   const raw = record?.metrics?.[definition.key];
@@ -187,7 +198,7 @@ function renderEffectEvaluation(payload) {
   if (!evaluated) {
     gateList.innerHTML = '<span class="gate-chip neutral">尚无硬指标结果</span>';
   } else if (failures.length) {
-    gateList.innerHTML = failures.map((failure) => `<span class="gate-chip failed">${escapeHtml(FAILURE_LABELS[failure] || failure)}</span>`).join('');
+    gateList.innerHTML = failures.map((failure) => `<span class="gate-chip failed">${escapeHtml(failureLabel(failure))}</span>`).join('');
   } else {
     gateList.innerHTML = ['仿真成功', '数值有效', '闭环稳定', '固定指标全部通过']
       .map((label) => `<span class="gate-chip passed">${label}</span>`).join('');
@@ -266,9 +277,9 @@ function pidSummary(record) {
 
 function failureText(record) {
   const failures = record?.failures;
-  if (Array.isArray(failures)) return failures.join('; ') || '-';
-  if (failures && typeof failures === 'object') return Object.values(failures).join('; ') || '-';
-  return value(failures);
+  if (Array.isArray(failures)) return failures.map(failureLabel).join('; ') || '-';
+  if (failures && typeof failures === 'object') return Object.values(failures).map(failureLabel).join('; ') || '-';
+  return failures ? failureLabel(failures) : '-';
 }
 
 function renderRecent(records) {
