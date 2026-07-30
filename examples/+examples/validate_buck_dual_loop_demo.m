@@ -1,5 +1,5 @@
 function report = validate_buck_dual_loop_demo()
-%VALIDATE_BUCK_DUAL_LOOP_DEMO Simulate and verify the baseline electrical design.
+%VALIDATE_BUCK_DUAL_LOOP_DEMO Simulate and verify both cascade loops.
 
 model = "pid_ai_buck_dual_loop_demo";
 if ~isfile(model + ".slx")
@@ -7,34 +7,25 @@ if ~isfile(model + ".slx")
 end
 load_system(model);
 set_param(model, "FastRestart", "off");
-output = sim(model, "StopTime", "0.3");
 
-cfg = pid_tuning_core.defaultPidTuningConfig();
-cfg.referenceSignalName = "r";
-cfg.outputSignalName = "y";
-cfg.controlSignalName = "u";
-cfg.currentSignalName = "iL";
-cfg.metrics.controlUpperLimit = 0.95;
-cfg.targets.overshootPctMax = 12;
-cfg.targets.settlingTimeMax = 0.27;
-cfg.targets.steadyStateErrorAbsMax = 0.1;
-cfg.targets.iaeMax = 0.65;
-cfg.targets.maxAbsControlMax = 0.95;
-cfg.targets.maxAbsCurrentMax = 6;
-cfg.targets.outputRippleMax = 0.2;
-cfg.targets.controlSaturationFractionMax = 0.02;
-
-voltagePid = struct("name", "voltage", "Kp", 0.08, "Ki", 8, "Kd", 0, "N", 100);
-currentPid = struct("name", "current", "Kp", 0.04, "Ki", 8, "Kd", 0, "N", 100);
+cfg = examples.buck_dual_loop_config();
+[cfg, ~] = pid_tuning_core.setupPidBlocks(cfg);
+output = sim(model, "StopTime", cfg.stopTime);
 simulation = struct("success", true, "output", output, "error", "");
-metrics = pid_tuning_core.evaluatePidRun( ...
-    simulation, struct("pids", [voltagePid, currentPid]), cfg);
+metrics = pid_tuning_core.evaluatePidRun(simulation, cfg.initialCandidate, cfg);
 validation = pid_tuning_core.validatePidMetrics(metrics, cfg);
 
-report = struct("metrics", metrics, "validation", validation);
-fprintf("Buck baseline: pass=%d, overshoot=%.3f%%, settling=%.4fs, " + ...
-    "SSE=%.5fV, Ipeak=%.3fA, ripple=%.5fV, duty=%.3f\n", ...
-    validation.passed, metrics.overshootPct, metrics.settlingTime, ...
-    metrics.steadyStateError, metrics.maxAbsCurrent, metrics.outputRipple, ...
-    metrics.maxAbsControl);
+roles = lower(string({metrics.loopMetrics.role}));
+outer = metrics.loopMetrics(find(roles == "outer", 1));
+inner = metrics.loopMetrics(find(roles == "inner", 1));
+report = struct("metrics", metrics, "validation", validation, "config", cfg);
+fprintf("Buck baseline: pass=%d\n", validation.passed);
+fprintf("  voltage: overshoot=%.3f%%, settling=%.4fs, SSE=%.5fV, " + ...
+    "Ipeak=%.3fA, ripple=%.5fV, Iref=%.3fA\n", ...
+    outer.overshootPct, outer.settlingTime, outer.steadyStateError, ...
+    outer.maxAbsCurrent, outer.outputRipple, outer.maxAbsControl);
+fprintf("  current: overshoot=%.3f%%, settling=%.4fs, SSE=%.5fA, " + ...
+    "IAE=%.5f, duty=%.3f, RMSE=%.5fA\n", ...
+    inner.overshootPct, inner.settlingTime, inner.steadyStateError, ...
+    inner.iae, inner.maxAbsControl, inner.trackingRmse);
 end

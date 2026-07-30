@@ -71,6 +71,28 @@ verifyEqual(testCase, roles(innerMask), repmat("inner", 1, nnz(innerMask)));
 verifyEqual(testCase, roles(outerMask), repmat("outer", 1, nnz(outerMask)));
 end
 
+function testBuckCascadeSignalsPassThroughSaturation(testCase)
+modelPath = fullfile(testCase.TestData.Root, "pid_ai_buck_dual_loop_demo.slx");
+info = pid_tuning_core.inspectPidModel(modelPath);
+verifyEqual(testCase, sort(string(info.loggedSignals)), ...
+    sort(["iL"; "iRef"; "r"; "u"; "y"]));
+verifyEqual(testCase, numel(info.cascadePairs), 1);
+
+paths = string({info.pidBlocks.path});
+inner = info.pidBlocks(contains(paths, "Inner_Current_PI"));
+outer = info.pidBlocks(contains(paths, "Outer_Voltage_PI"));
+verifyEqual(testCase, string(inner.signalSuggestion.referenceSignalName), "iRef");
+verifyEqual(testCase, string(inner.signalSuggestion.outputSignalName), "iL");
+verifyEqual(testCase, string(inner.signalSuggestion.controlSignalName), "u");
+verifyEqual(testCase, string(outer.signalSuggestion.controlSignalName), "iRef");
+verifyEqual(testCase, string(inner.suggestedRole), "inner");
+verifyEqual(testCase, string(outer.suggestedRole), "outer");
+verifyEqual(testCase, string(inner.cascadePartnerPath), string(outer.path));
+verifyEqual(testCase, string(outer.cascadePartnerPath), string(inner.path));
+verifyTrue(testCase, inner.signalSuggestion.allLogged);
+verifyTrue(testCase, outer.signalSuggestion.allLogged);
+end
+
 function testJsonScanBridge(testCase)
 requestPath = string(tempname) + ".json";
 outputPath = string(tempname) + ".json";

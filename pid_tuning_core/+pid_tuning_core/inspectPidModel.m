@@ -223,7 +223,7 @@ end
 
 function name = localDownstreamLoggedName(lineHandle)
 name = "";
-transparentTypes = ["saturation", "deadzone", "ratetransition", ...
+transparentTypes = ["saturate", "saturation", "deadzone", "ratetransition", ...
     "datatypeconversion", "signalconversion"];
 try
     destinationPorts = get_param(lineHandle, "DstPortHandle");

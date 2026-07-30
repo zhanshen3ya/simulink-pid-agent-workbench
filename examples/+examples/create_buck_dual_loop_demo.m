@@ -53,6 +53,7 @@ localBuildPowerStage(plant);
 
 localAddLog(model, "Log_r", "r", [930 20 1000 50]);
 localAddLog(model, "Log_y", "y", [930 75 1000 105]);
+localAddLog(model, "Log_iRef", "iRef", [410 20 480 50]);
 localAddLog(model, "Log_u", "u", [700 20 770 50]);
 localAddLog(model, "Log_iL", "iL", [930 130 1000 160]);
 
@@ -69,6 +70,7 @@ add_line(model, "Buck_Power_Stage/1", "Voltage_Error/2", "autorouting", "on");
 add_line(model, "Buck_Power_Stage/2", "Current_Error/2", "autorouting", "on");
 add_line(model, "Voltage_Reference/1", "Log_r/1", "autorouting", "on");
 add_line(model, "Buck_Power_Stage/1", "Log_y/1", "autorouting", "on");
+add_line(model, "Current_Reference_Limit/1", "Log_iRef/1", "autorouting", "on");
 add_line(model, "Duty_Cycle_Limit/1", "Log_u/1", "autorouting", "on");
 add_line(model, "Buck_Power_Stage/2", "Log_iL/1", "autorouting", "on");
 
