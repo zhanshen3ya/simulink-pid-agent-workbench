@@ -934,25 +934,3 @@ function applyEmbeddedContext(context) {
   if (context.initialView) activateView(context.initialView);
   refreshJob();
 }
-// The Buck button opens the model for verified mapping instead of launching a stale hard-coded task.
-async function startBuckDemo() {
-  const button = el('startBuckDemoButton');
-  button.disabled = true;
-  button.textContent = '读取 Buck 模型中...';
-  try {
-    let modelPath = String(state.health?.buckDualLoopDemo || '');
-    if (!modelPath) {
-      const health = await api('/api/health');
-      state.health = health;
-      modelPath = String(health.buckDualLoopDemo || '');
-    }
-    if (!modelPath) throw new Error('网关没有返回 Buck 示例模型路径。');
-    el('modelPathInput').value = modelPath;
-    await discoverModel();
-  } catch (error) {
-    setScanState(`Buck 模型读取失败：${error.message}`, true);
-  } finally {
-    button.disabled = false;
-    button.textContent = '读取 Buck 双环模型';
-  }
-}

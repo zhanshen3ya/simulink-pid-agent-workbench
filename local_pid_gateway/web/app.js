@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   activeJobId: null,
   status: null,
   history: [],
@@ -202,21 +202,6 @@ async function refreshJob() {
   }
 }
 
-async function startDemo() {
-  el('startDemoButton').disabled = true;
-  el('startDemoButton').textContent = '启动中...';
-  try {
-    const payload = await api('/api/pid/jobs/demo', { method: 'POST' });
-    state.activeJobId = payload.jobId;
-    await refreshJob();
-  } catch (err) {
-    el('connectionState').textContent = `启动失败：${err.message}`;
-  } finally {
-    el('startDemoButton').disabled = false;
-    el('startDemoButton').textContent = '启动双 PID Demo';
-  }
-}
-
 function bindNavigation() {
   document.querySelectorAll('.nav-item').forEach((button) => {
     button.addEventListener('click', () => {
@@ -231,7 +216,6 @@ function bindNavigation() {
 function init() {
   bindNavigation();
   el('refreshButton').addEventListener('click', refreshJob);
-  el('startDemoButton').addEventListener('click', startDemo);
   renderHistory([]);
   renderRecent([]);
   renderPidRows('currentPidRows', null);

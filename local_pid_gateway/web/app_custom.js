@@ -1093,59 +1093,6 @@ async function startCustom() {
   }
 }
 
-async function startSingleDemo() {
-  const button = el('startSingleDemoButton');
-  button.disabled = true;
-  button.textContent = '启动中...';
-  try {
-    state.enforceModelMatch = false;
-    state.preferredModelPath = '';
-    state.preferredModelName = '';
-    const payload = await api('/api/pid/jobs/demo/single', { method: 'POST' });
-    state.activeJobId = payload.jobId;
-    await refreshJob();
-  } catch (error) {
-    el('connectionState').textContent = `启动失败：${error.message}`;
-  } finally {
-    button.disabled = false;
-    button.textContent = '运行单 PID Demo';
-  }
-}
-async function startBuckDemo() {
-  const button = el('startBuckDemoButton');
-  button.disabled = true;
-  button.textContent = '启动 Buck 仿真中...';
-  try {
-    const payload = await api('/api/pid/jobs/demo/buck', { method: 'POST' });
-    state.activeJobId = payload.jobId;
-    await refreshJob();
-  } catch (error) {
-    el('connectionState').textContent = `Buck Demo 启动失败：${error.message}`;
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Buck 双环电路 Demo';
-  }
-}
-
-async function startDemo() {
-  const button = el('startDemoButton');
-  button.disabled = true;
-  button.textContent = '启动中...';
-  try {
-    state.enforceModelMatch = false;
-    state.preferredModelPath = '';
-    state.preferredModelName = '';
-    const payload = await api('/api/pid/jobs/demo', { method: 'POST' });
-    state.activeJobId = payload.jobId;
-    await refreshJob();
-  } catch (error) {
-    el('connectionState').textContent = `启动失败：${error.message}`;
-  } finally {
-    button.disabled = false;
-    button.textContent = '运行双 PID Demo';
-  }
-}
-
 function activateView(viewName) {
   const view = ['run', 'history', 'result'].includes(String(viewName)) ? String(viewName) : 'run';
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
@@ -1159,9 +1106,6 @@ function bindNavigation() {
 function init() {
   bindNavigation();
   el('refreshButton').addEventListener('click', refreshJob);
-  el('startSingleDemoButton').addEventListener('click', startSingleDemo);
-  el('startBuckDemoButton').addEventListener('click', startBuckDemo);
-  el('startDemoButton').addEventListener('click', startDemo);
   el('selectModelButton').addEventListener('click', selectModel);
   el('discoverModelButton').addEventListener('click', discoverModel);
   el('syncSimulinkButton').addEventListener('click', () => sendMatlabEvent('SyncCurrentModel', {}));
