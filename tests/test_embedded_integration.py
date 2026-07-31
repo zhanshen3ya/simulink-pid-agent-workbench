@@ -181,6 +181,46 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 server_custom.normalize_custom_payload(payload)
             self.assertEqual(raised.exception.code, "CASCADE_SIGNAL_CHAIN_INVALID")
 
+    def test_transformed_cascade_accepts_scanned_topology_relation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            payload["availableSignalNames"].append("iGridRef")
+            payload["evaluationLoops"][1]["referenceSignalName"] = "iGridRef"
+            payload["cascadeRelation"] = {
+                "outerPidPath": "controller/Outer PID",
+                "innerPidPath": "controller/Inner PID",
+                "connectionKind": "transformed",
+                "transformBlocks": ["controller/Current Reference Product"],
+                "outerControlSignalName": "iRef",
+                "innerReferenceSignalName": "iGridRef",
+            }
+            normalized = server_custom.normalize_custom_payload(payload)
+            self.assertEqual(normalized["cascadeRelation"]["connectionKind"], "transformed")
+            self.assertEqual(
+                normalized["cascadeRelation"]["transformBlocks"],
+                ["controller/Current Reference Product"],
+            )
+
+    def test_transformed_cascade_rejects_mismatched_signal_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "controller.slx"
+            model.touch()
+            payload = dual_loop_payload(model)
+            payload["availableSignalNames"].append("iGridRef")
+            payload["evaluationLoops"][1]["referenceSignalName"] = "iGridRef"
+            payload["cascadeRelation"] = {
+                "outerPidPath": "controller/Outer PID",
+                "innerPidPath": "controller/Inner PID",
+                "connectionKind": "transformed",
+                "transformBlocks": ["controller/Current Reference Product"],
+                "outerControlSignalName": "wrong",
+                "innerReferenceSignalName": "iGridRef",
+            }
+            with self.assertRaises(server_custom.RequestValidationError) as raised:
+                server_custom.normalize_custom_payload(payload)
+            self.assertEqual(raised.exception.code, "CASCADE_RELATION_SIGNAL_MISMATCH")
     def test_cascade_requires_outer_primary_loop(self):
         with tempfile.TemporaryDirectory() as directory:
             model = Path(directory) / "controller.slx"
@@ -402,7 +442,11 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("state.activeJobMatchesModel", app_v2_js)
         self.assertIn("当前显示的是其他模型的历史任务", app_v2_js)
         self.assertIn("document.body.classList.add('embedded-mode')", app_v2_js)
-        self.assertIn("outer.controlSignalName !== inner.referenceSignalName", app_v2_js)
+        self.assertIn("function cascadeRelationForLoops", app_v2_js)
+        self.assertIn("function cascadeRelationMatchesSignals", app_v2_js)
+        self.assertIn("const directChain = outer.controlSignalName === inner.referenceSignalName", app_v2_js)
+        self.assertIn("cascadeRelation,", app_v2_js)
+        self.assertIn("缺少或错误：", app_v2_js)
         self.assertIn("inner.targets.settlingTimeMax < outer.targets.settlingTimeMax", app_v2_js)
         self.assertIn("MATLAB 正在读取模型，已等待", app_v2_js)
         self.assertIn("number.toExponential(2)", app_v2_js)

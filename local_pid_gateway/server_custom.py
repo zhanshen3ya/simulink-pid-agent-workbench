@@ -35,7 +35,7 @@ MATLAB = find_matlab_executable()
 JOBS = {}
 REQUEST_LOG = ROOT / "local_pid_gateway" / "gateway_requests.jsonl"
 REQUEST_LOG_LOCK = threading.Lock()
-SERVER_VERSION = "0.5.0-beta.1"
+SERVER_VERSION = "0.5.0-beta.2-dev"
 MATLAB_HEALTH_CACHE = {"checkedAt": 0.0, "ready": False, "error": "正在检查 MATLAB"}
 MATLAB_HEALTH_LOCK = threading.Lock()
 MATLAB_HEALTH_PROBING = False
@@ -356,6 +356,54 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def normalize_cascade_relation(raw, outer, inner):
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RequestValidationError(
+            "级联拓扑关系必须是对象。", "CASCADE_RELATION_INVALID", "cascadeRelation"
+        )
+    outer_path = str(raw.get("outerPidPath") or "").strip()
+    inner_path = str(raw.get("innerPidPath") or "").strip()
+    if outer_path != outer["pidPath"] or inner_path != inner["pidPath"]:
+        raise RequestValidationError(
+            "级联拓扑关系与所选内外环 PID 不一致。",
+            "CASCADE_RELATION_INVALID", "cascadeRelation"
+        )
+    connection_kind = str(raw.get("connectionKind") or "").strip().lower()
+    if connection_kind != "transformed":
+        raise RequestValidationError(
+            "不同名级联信号必须具有已扫描确认的变换连接。",
+            "CASCADE_RELATION_INVALID", "cascadeRelation.connectionKind"
+        )
+    transform_blocks = raw.get("transformBlocks")
+    if isinstance(transform_blocks, str):
+        transform_blocks = [transform_blocks]
+    if not isinstance(transform_blocks, list):
+        transform_blocks = []
+    transform_blocks = [str(item).strip() for item in transform_blocks if str(item).strip()]
+    if not transform_blocks:
+        raise RequestValidationError(
+            "变换级联关系缺少中间模块路径。",
+            "CASCADE_RELATION_INVALID", "cascadeRelation.transformBlocks"
+        )
+    outer_signal = str(raw.get("outerControlSignalName") or "").strip()
+    inner_signal = str(raw.get("innerReferenceSignalName") or "").strip()
+    if (outer_signal != outer["controlSignalName"]
+            or inner_signal != inner["referenceSignalName"]):
+        raise RequestValidationError(
+            "级联拓扑证据与当前选择的外环输出或内环参考信号不一致。",
+            "CASCADE_RELATION_SIGNAL_MISMATCH", "cascadeRelation"
+        )
+    return {
+        "outerPidPath": outer_path,
+        "innerPidPath": inner_path,
+        "connectionKind": connection_kind,
+        "transformBlocks": transform_blocks,
+        "outerControlSignalName": outer_signal,
+        "innerReferenceSignalName": inner_signal,
+    }
+
 def normalize_custom_payload(payload):
     if not isinstance(payload, dict):
         raise RequestValidationError("请求配置必须是 JSON 对象。")
@@ -526,6 +574,7 @@ def normalize_custom_payload(payload):
             "必须且只能指定一个主评价环路。", "PRIMARY_LOOP_INVALID", "evaluationLoops"
         )
     primary = next(item for item in loops if item["primary"])
+    cascade_relation = None
 
     strategy = str(payload.get("searchStrategy") or "auto").strip().lower()
     if strategy not in {"auto", "joint", "cascade"}:
@@ -554,11 +603,16 @@ def normalize_custom_payload(payload):
                 "级联双环必须将外环设为主评价环。",
                 "CASCADE_PRIMARY_OUTER_REQUIRED", "evaluationLoops"
             )
-        if outer["controlSignalName"] != inner["referenceSignalName"]:
-            raise RequestValidationError(
-                "级联信号链不完整：外环控制输出必须与内环参考信号相同。",
-                "CASCADE_SIGNAL_CHAIN_INVALID", "evaluationLoops"
+        direct_chain = outer["controlSignalName"] == inner["referenceSignalName"]
+        if not direct_chain:
+            cascade_relation = normalize_cascade_relation(
+                payload.get("cascadeRelation"), outer, inner
             )
+            if cascade_relation is None:
+                raise RequestValidationError(
+                    "级联信号链不完整：外环控制输出必须直接或经过已扫描变换连接到内环参考。",
+                    "CASCADE_SIGNAL_CHAIN_INVALID", "evaluationLoops"
+                )
         inner_settling = inner["targets"].get("settlingTimeMax")
         outer_settling = outer["targets"].get("settlingTimeMax")
         if inner_settling is None or outer_settling is None:
@@ -587,6 +641,7 @@ def normalize_custom_payload(payload):
         "evaluationLoops": loops,
         "availableSignalNames": available_signal_names,
         "signalMappingConfirmed": True,
+        "cascadeRelation": cascade_relation,
         "evaluationPidPath": primary["pidPath"],
         "controlLowerLimit": global_lower,
         "controlUpperLimit": global_upper,
@@ -720,6 +775,7 @@ def start_demo_job():
         "stopOnFirstPass": False, "searchStrategy": "cascade",
         "availableSignalNames": ["r", "y", "inner_ref", "inner_y", "u"],
         "signalMappingConfirmed": True,
+        "cascadeRelation": None,
         "evaluationLoops": [
             {
                 "name": "position", "role": "outer", "pidPath": "pid_ai_cascade_two_pid_demo/Outer PID",

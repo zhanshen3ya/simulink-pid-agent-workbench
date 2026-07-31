@@ -36,17 +36,56 @@ function pidSystem(block) {
     path: parentParts.join('/'),
   };
 }
+function cascadePairForPaths(outerPath, innerPath) {
+  return normalizeList(state.modelInfo?.cascadePairs).find((pair) => (
+    String(pair?.outerPath || '') === String(outerPath || '')
+      && String(pair?.innerPath || '') === String(innerPath || '')
+  )) || null;
+}
+
+function cascadeRelationForLoops(loops) {
+  const outer = loops.find((loop) => loop.role === 'outer');
+  const inner = loops.find((loop) => loop.role === 'inner');
+  if (!outer || !inner) return null;
+  const pair = cascadePairForPaths(outer.pidPath, inner.pidPath);
+  if (!pair) return null;
+  return {
+    outerPidPath: String(pair.outerPath || ''),
+    innerPidPath: String(pair.innerPath || ''),
+    connectionKind: String(pair.connectionKind || 'direct'),
+    transformBlocks: stringArray(pair.transformBlocks),
+    outerControlSignalName: String(pair.outerControlSignalName || ''),
+    innerReferenceSignalName: String(pair.innerReferenceSignalName || ''),
+    evidence: String(pair.evidence || ''),
+  };
+}
+
+function cascadeRelationMatchesSignals(relation, outer, inner) {
+  if (!relation || !outer || !inner) return false;
+  const expectedOuter = String(relation.outerControlSignalName || '');
+  const expectedInner = String(relation.innerReferenceSignalName || '');
+  return Boolean(expectedOuter && expectedInner
+    && expectedOuter === outer.controlSignalName
+    && expectedInner === inner.referenceSignalName);
+}
 
 function loopRelationshipMarkup(blocks, selected) {
   if (selected.length !== 2) return '';
   const first = blocks[selected[0]] || {};
   const second = blocks[selected[1]] || {};
-  const paired = String(first.cascadePartnerPath || '') === String(second.path || '')
-    && String(second.cascadePartnerPath || '') === String(first.path || '');
+  const pair = cascadePairForPaths(first.path, second.path)
+    || cascadePairForPaths(second.path, first.path);
+  const paired = Boolean(pair);
   const sameSystem = pidSystem(first).path && pidSystem(first).path === pidSystem(second).path;
   const kind = paired ? 'confirmed' : (sameSystem ? 'review' : 'warning');
-  const text = paired ? '拓扑连接已确认' : (sameSystem ? '同一子系统，需核对内外环信号' : '跨子系统选择，必须人工确认属于同一控制系统');
-  return `<div class="loop-relationship ${kind}"><strong>双环关系</strong><span>${escapeHtml(text)}</span></div>`;
+  let relationshipText = '拓扑连接已确认';
+  if (paired && String(pair.connectionKind || '') === 'transformed') {
+    const transforms = stringArray(pair.transformBlocks).map((path) => path.split('/').pop()).filter(Boolean);
+    relationshipText = `变换级联已确认：外环输出经 ${transforms.join(' → ') || '中间模块'} 进入内环参考`;
+  } else if (!paired) {
+    relationshipText = sameSystem ? '同一子系统，需核对内外环信号' : '跨子系统选择，必须人工确认属于同一控制系统';
+  }
+  return `<div class="loop-relationship ${kind}"><strong>双环关系</strong><span>${escapeHtml(relationshipText)}</span></div>`;
 }
 
 function suggestedRole(block, total) {
@@ -217,7 +256,7 @@ function renderSignalMapping() {
         <label><input class="loop-primary" name="primary-loop" type="radio" ${primary ? 'checked' : ''}>主评价环</label>
         <button class="loop-suggest" type="button">应用拓扑建议</button></div>
       <div class="loop-fields">
-        <label><span>参考值</span>${loopSignalSelect('loop-reference', reference, false, block)}</label>
+        <label><span>参考信号</span>${loopSignalSelect('loop-reference', reference, false, block)}</label>
         <label><span>反馈 / 输出</span>${loopSignalSelect('loop-output', output, false, block)}</label>
         <label><span>控制输出</span>${loopSignalSelect('loop-control', control, false, block)}</label>
         <label><span>电流保护信号</span>${loopSignalSelect('loop-current', current, true, block)}</label>
@@ -251,11 +290,17 @@ function updateLoopValidity() {
     const control = loopValue(card, '.loop-control');
     const lower = Number(loopValue(card, '.loop-control-lower'));
     const upper = Number(loopValue(card, '.loop-control-upper'));
-    const signalsOkay = [reference, output, control].every((name) => available.has(name)) && reference !== output;
+    const missingSignals = [];
+    if (!available.has(reference)) missingSignals.push('参考信号');
+    if (!available.has(output)) missingSignals.push('反馈信号');
+    if (!available.has(control)) missingSignals.push('控制信号');
+    if (reference && reference === output) missingSignals.push('参考与反馈不能相同');
+    const signalsOkay = missingSignals.length === 0;
     const limitsOkay = Number.isFinite(lower) && Number.isFinite(upper) && lower < upper;
     const status = card.querySelector('.loop-validity');
     const okay = signalsOkay && limitsOkay;
-    status.textContent = okay ? '映射与限幅完整' : (!signalsOkay ? '信号映射不完整' : '请填写有效控制限幅');
+    status.textContent = okay ? '映射与限幅完整'
+      : (missingSignals.length ? `缺少或错误：${missingSignals.join('、')}` : '请填写有效控制限幅');
     status.className = `loop-validity ${okay ? 'valid' : 'invalid'}`;
   });
 }
@@ -385,6 +430,7 @@ function collectCustomConfig() {
   });
   if (evaluationLoops.filter((loop) => loop.primary).length !== 1) throw new Error('必须且只能选择一个主评价环路。');
   const searchStrategy = el('searchStrategyInput').value;
+  let cascadeRelation = null;
   if (evaluationLoops.length === 2) {
     const roles = new Set(evaluationLoops.map((loop) => loop.role));
     const hasCascadeRoles = roles.size === 2 && roles.has('inner') && roles.has('outer');
@@ -399,9 +445,13 @@ function collectCustomConfig() {
       const inner = evaluationLoops.find((loop) => loop.role === 'inner');
       const outer = evaluationLoops.find((loop) => loop.role === 'outer');
       if (!outer.primary) throw new Error('级联双环必须将外环设为主评价环。');
-      if (outer.controlSignalName !== inner.referenceSignalName) {
-        throw new Error('级联信号链不完整：外环控制输出必须与内环参考信号相同。');
+      const scannedRelation = cascadeRelationForLoops(evaluationLoops);
+      const transformedChain = cascadeRelationMatchesSignals(scannedRelation, outer, inner);
+      const directChain = outer.controlSignalName === inner.referenceSignalName;
+      if (!directChain && !transformedChain) {
+        throw new Error('级联信号链不完整：外环控制输出必须直接或经过已识别变换连接到内环参考。');
       }
+      cascadeRelation = transformedChain ? scannedRelation : null;
       if (!(inner.targets.settlingTimeMax < outer.targets.settlingTimeMax)) {
         throw new Error('级联评价目标不合理：内环调节时间上限必须小于外环。');
       }
@@ -424,7 +474,7 @@ function collectCustomConfig() {
     controlSignalName: primary.controlSignalName,
     currentSignalName: primary.currentSignalName,
     evaluationPidPath: primary.pidPath,
-    evaluationLoops, availableSignalNames, signalMappingConfirmed: true,
+    evaluationLoops, availableSignalNames, signalMappingConfirmed: true, cascadeRelation,
     searchStrategy,
     stopTime: String(numberFrom('stopTimeInput', { label: '仿真停止时间', min: Number.MIN_VALUE })),
     maxIterations, numCandidates,

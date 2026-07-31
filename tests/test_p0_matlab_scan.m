@@ -93,6 +93,26 @@ verifyTrue(testCase, inner.signalSuggestion.allLogged);
 verifyTrue(testCase, outer.signalSuggestion.allLogged);
 end
 
+function testTransformedCascadeUsesTopologyInsteadOfSignalEquality(testCase)
+[modelPath, modelName] = localCreateTransformedCascadeModel();
+cleanup = onCleanup(@() localCloseAndDeleteModel(modelName, modelPath));
+info = pid_tuning_core.inspectPidModel(modelPath);
+
+verifyEqual(testCase, numel(info.cascadePairs), 1);
+pair = info.cascadePairs(1);
+verifyEqual(testCase, string(pair.connectionKind), "transformed");
+verifyEqual(testCase, string(pair.outerControlSignalName), "iRef");
+verifyEqual(testCase, string(pair.innerReferenceSignalName), "iGridRef");
+verifyTrue(testCase, any(endsWith(string(pair.transformBlocks), "/Current Reference Product")));
+
+paths = string({info.pidBlocks.path});
+outer = info.pidBlocks(endsWith(paths, "/Voltage PID"));
+inner = info.pidBlocks(endsWith(paths, "/Current PID"));
+verifyEqual(testCase, string(outer.suggestedRole), "outer");
+verifyEqual(testCase, string(inner.suggestedRole), "inner");
+verifyEqual(testCase, string(outer.cascadePartnerPath), string(inner.path));
+verifyEqual(testCase, string(inner.cascadePartnerPath), string(outer.path));
+end
 function testJsonScanBridge(testCase)
 requestPath = string(tempname) + ".json";
 outputPath = string(tempname) + ".json";
@@ -121,6 +141,50 @@ verifyEqual(testCase, numel(result.signals.time), numel(result.signals.output));
 verifyEqual(testCase, numel(result.signals.time), numel(result.signals.control));
 end
 
+function [modelPath, modelName] = localCreateTransformedCascadeModel()
+[folder, baseName] = fileparts(tempname);
+modelName = string(matlab.lang.makeValidName("pid_agent_" + baseName));
+modelPath = fullfile(folder, modelName + ".slx");
+new_system(modelName);
+add_block("simulink/Sources/Step", modelName + "/Voltage Reference");
+add_block("simulink/Sources/Constant", modelName + "/Voltage Feedback");
+add_block("simulink/Math Operations/Sum", modelName + "/Voltage Error", "Inputs", "+-");
+add_block("simulink/Continuous/PID Controller", modelName + "/Voltage PID");
+add_block("simulink/Sources/Constant", modelName + "/Carrier", "Value", "1");
+add_block("simulink/Math Operations/Product", modelName + "/Current Reference Product");
+add_block("simulink/Sources/Constant", modelName + "/Current Feedback");
+add_block("simulink/Math Operations/Sum", modelName + "/Current Error", "Inputs", "+-");
+add_block("simulink/Continuous/PID Controller", modelName + "/Current PID");
+add_block("simulink/Sinks/Terminator", modelName + "/PWM Input");
+localAddLoggedLine(modelName, "Voltage Reference/1", "Voltage Error/1", "vRef");
+localAddLoggedLine(modelName, "Voltage Feedback/1", "Voltage Error/2", "vOut");
+add_line(modelName, "Voltage Error/1", "Voltage PID/1");
+localAddLoggedLine(modelName, "Voltage PID/1", "Current Reference Product/1", "iRef");
+add_line(modelName, "Carrier/1", "Current Reference Product/2");
+localAddLoggedLine(modelName, "Current Reference Product/1", "Current Error/1", "iGridRef");
+localAddLoggedLine(modelName, "Current Feedback/1", "Current Error/2", "iGrid");
+add_line(modelName, "Current Error/1", "Current PID/1");
+localAddLoggedLine(modelName, "Current PID/1", "PWM Input/1", "duty");
+save_system(modelName, modelPath);
+end
+
+function localAddLoggedLine(modelName, source, destination, signalName)
+lineHandle = add_line(modelName, source, destination);
+set_param(lineHandle, "Name", signalName);
+loggerName = "log_" + signalName;
+add_block("simulink/Sinks/To Workspace", modelName + "/" + loggerName, ...
+    "VariableName", signalName, "SaveFormat", "Timeseries");
+add_line(modelName, source, loggerName + "/1", "autorouting", "on");
+end
+
+function localCloseAndDeleteModel(modelName, modelPath)
+if bdIsLoaded(modelName)
+    close_system(modelName, 0);
+end
+if isfile(modelPath)
+    delete(modelPath);
+end
+end
 function localWriteText(path, text)
 fileId = fopen(path, "w", "n", "UTF-8");
 assert(fileId >= 0, "Cannot create temporary JSON file.");
