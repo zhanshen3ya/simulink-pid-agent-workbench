@@ -307,6 +307,31 @@ class EmbeddedIntegrationTests(unittest.TestCase):
                 server_custom.RUNS = original_runs
             self.assertEqual(raised.exception.code, "JOB_NOT_COMPLETED")
 
+    def test_job_launch_status_becomes_running_before_matlab_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            job = run_root / "job-starting"
+            job.mkdir()
+            (job / "current_status.json").write_text(
+                json.dumps({"jobId": job.name, "status": "queued", "modelName": "demo"}),
+                encoding="utf-8",
+            )
+            original_runs = server_custom.RUNS
+            try:
+                server_custom.RUNS = run_root
+                process = type("Process", (), {"pid": 12345})()
+                server_custom.mark_job_running(job.name, process)
+                status = json.loads(
+                    (job / "current_status.json").read_text(encoding="utf-8")
+                )
+            finally:
+                server_custom.RUNS = original_runs
+
+            self.assertEqual(status["status"], "running")
+            self.assertEqual(status["currentStage"], "initializing")
+            self.assertEqual(status["processId"], 12345)
+            self.assertTrue(status["startedAt"])
+
     def test_job_status_includes_bound_model_path(self):
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory)
@@ -416,6 +441,9 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("function applySignalSuggestion", app_js)
         self.assertIn("availableSignalNames", app_js)
         self.assertIn("apiErrorText(error, '启动')", app_js)
+        self.assertIn("function updateStartButton", app_js)
+        self.assertIn("const optimisticStatus", app_js)
+        self.assertIn("function liveElapsedSeconds", app_v2_js)
         self.assertNotIn("el('currentMetrics')", app_js)
         self.assertIn("Multi-PID models require an explicit selection", app_v2_js)
         self.assertIn("return 'coupled';", app_v2_js)
@@ -479,6 +507,8 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertNotIn("addpath(genpath(pwd))", server_ai_text)
         self.assertNotIn("addpath(genpath(pwd))", server_custom_text)
         self.assertIn('script = run_dir / "run_job.m"', server_ai_text)
+        self.assertIn("base.mark_job_running(job_id, process)", server_ai_text)
+        self.assertIn("def mark_job_running(job_id, process):", server_custom_text)
 
 
 if __name__ == "__main__":

@@ -174,6 +174,7 @@ def launch_job(job_id, script, extra_env=None):
         env=environment,
     )
     base.JOBS[job_id] = {"process": process, "script": str(script)}
+    base.mark_job_running(job_id, process)
 
     def pump():
         log_path = base.RUNS / job_id / "matlab_stdout.log"

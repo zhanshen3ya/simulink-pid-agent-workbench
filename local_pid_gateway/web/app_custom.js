@@ -1077,19 +1077,48 @@ function collectCustomConfig() {
     },
   };
 }
+function updateStartButton(status) {
+  const button = el('startCustomButton');
+  const normalized = String(status || '').toLowerCase();
+  const active = normalized === 'queued' || normalized === 'running';
+  button.disabled = active;
+  button.textContent = normalized === 'queued'
+    ? 'MATLAB 初始化中'
+    : (normalized === 'running' ? '调参运行中' : '开始调参');
+}
+
 async function startCustom() {
   const button = el('startCustomButton');
   button.disabled = true;
-  button.textContent = '启动 MATLAB 中...';
+  button.textContent = '正在提交...';
+  setScanState('正在提交调参任务...');
   try {
-    const payload = await api('/api/pid/jobs/custom', jsonPost(collectCustomConfig()));
+    const config = collectCustomConfig();
+    const payload = await api('/api/pid/jobs/custom', jsonPost(config));
     state.activeJobId = payload.jobId;
+    state.enforceModelMatch = true;
+    const optimisticStatus = {
+      jobId: payload.jobId,
+      status: 'running',
+      currentStage: 'initializing',
+      modelName: state.modelInfo?.modelName || '',
+      aiMode: el('aiModeSelect').value || 'none',
+      currentIteration: 0,
+      maxIterations: Number(el('maxIterationsInput').value || 0),
+      testedCount: 0,
+      passedCount: 0,
+      elapsedSeconds: 0,
+      startedAt: new Date().toISOString(),
+    };
+    renderStatus(optimisticStatus);
+    activateView('run');
+    document.querySelector('.workspace')?.scrollTo({ top: 0, behavior: 'smooth' });
+    setScanState('任务已提交，MATLAB 正在初始化并执行基线仿真。');
     await refreshJob();
   } catch (error) {
     setScanState(apiErrorText(error, '启动'), true);
   } finally {
-    button.disabled = false;
-    button.textContent = '开始调参';
+    updateStartButton(state.status?.status);
   }
 }
 

@@ -192,6 +192,21 @@ def write_status(job_id, status):
     )
 
 
+def mark_job_running(job_id, process):
+    status_path = RUNS / job_id / "current_status.json"
+    current = read_json(status_path) or {"jobId": job_id}
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    current.update({
+        "jobId": job_id,
+        "status": "running",
+        "currentStage": "initializing",
+        "startedAt": current.get("startedAt") or timestamp,
+        "updatedAt": timestamp,
+        "processId": process.pid,
+    })
+    write_status(job_id, current)
+
+
 def list_jobs():
     if not RUNS.exists():
         return []
@@ -685,6 +700,7 @@ def launch_job(job_id, script):
         errors="replace",
     )
     JOBS[job_id] = {"process": process, "script": str(script)}
+    mark_job_running(job_id, process)
 
     def pump():
         log_path = RUNS / job_id / "matlab_stdout.log"

@@ -670,12 +670,21 @@ function renderHistory(rows) {
   drawScoreTrend(data);
 }
 
+function liveElapsedSeconds(payload) {
+  const reported = Number(payload.elapsedSeconds || 0);
+  const status = String(payload.status || '').toLowerCase();
+  if (!['queued', 'running'].includes(status) || !payload.startedAt) return reported;
+  const started = Date.parse(String(payload.startedAt).replace(' ', 'T'));
+  if (!Number.isFinite(started)) return reported;
+  return Math.max(reported, Math.max(0, (Date.now() - started) / 1000));
+}
+
 function renderStatus(payload) {
   state.status = payload;
   state.activeJobId = payload.jobId || state.activeJobId;
   el('jobTitle').textContent = payload.jobId ? `任务 ${payload.jobId}` : '选择模型开始';
   el('jobSubtitle').textContent = payload.error || (payload.modelName ? `${payload.modelName} · AI: ${value(payload.aiMode, 'none')} · ${value(payload.runDir)}` : '本地 MATLAB / Simulink');
-  el('elapsedTime').textContent = secondsToClock(payload.elapsedSeconds);
+  el('elapsedTime').textContent = secondsToClock(liveElapsedSeconds(payload));
   el('iterationText').textContent = `${value(payload.currentIteration, 0)} / ${value(payload.maxIterations, 0)}`;
   el('testedText').textContent = value(payload.testedCount, 0);
   el('passedText').textContent = value(payload.passedCount, 0);
@@ -689,7 +698,11 @@ function renderStatus(payload) {
     ? '当前显示的是其他模型的历史任务；参数写入和回滚已禁用。' : '';
   contextWarning.classList.toggle('hidden', !showContextWarning);
   el('statusPill').textContent = statusLabel(status);
-  el('statusPill').className = `status-pill ${status}`;
+  el('statusPill').className = 'status-pill ' + status;
+  updateStartButton(status);
+  el('footerStatus').textContent = status === 'running' || status === 'queued'
+    ? '任务 ' + (payload.jobId || '') + '：' + stageLabel(payload.currentStage || 'initializing')
+    : 'PID Agent 就绪';
   const current = recordOrNull(payload.current);
   el('currentSummary').textContent = current ? `${sourceLabel(current)} · 候选 ${value(current.candidateIndex)} / 分数 ${value(current.score)}` : '暂无';
   renderPidRows('currentPidRows', current);
