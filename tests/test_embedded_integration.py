@@ -454,6 +454,7 @@ class EmbeddedIntegrationTests(unittest.TestCase):
 
         matlab_app = (ROOT / "+pid_agent_ui" / "PidAgentWebApp.m").read_text(encoding="utf-8")
         http_helper = (ROOT / "+pid_agent_ui" / "sendGatewayHttpRequest.m").read_text(encoding="utf-8")
+        request_builder = (ROOT / "+pid_agent_ui" / "buildGatewayRequest.m").read_text(encoding="utf-8")
         self.assertNotIn("webwrite", matlab_app)
         self.assertIn("pid_agent_ui.sendGatewayHttpRequest", matlab_app)
         self.assertIn("performModelAction", matlab_app)
@@ -463,7 +464,13 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         preflight = (ROOT / "run_pid_tuning_from_json.m").read_text(encoding="utf-8")
         self.assertIn("localValidateModelMapping", preflight)
         self.assertIn("PIDAgent:SignalNotLogged", preflight)
-        self.assertIn("matlab.net.http.RequestMessage", http_helper)
+        self.assertIn("pid_agent_ui.buildGatewayRequest", http_helper)
+        self.assertIn("RequestMethod.POST", request_builder)
+        self.assertIn("RequestMethod.GET", request_builder)
+        self.assertIn("MessageBody(body)", request_builder)
+        self.assertNotIn("jsonencode(body)", request_builder)
+        self.assertNotIn('RequestMessage("post"', request_builder)
+        self.assertNotIn('RequestMessage("get"', request_builder)
 
         server_ai_text = (ROOT / "local_pid_gateway" / "server_ai.py").read_text(encoding="utf-8")
         server_custom_text = (ROOT / "local_pid_gateway" / "server_custom.py").read_text(encoding="utf-8")

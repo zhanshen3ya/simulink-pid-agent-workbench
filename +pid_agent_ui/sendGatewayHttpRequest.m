@@ -8,22 +8,9 @@ arguments
 end
 
 import matlab.net.URI
-import matlab.net.http.HeaderField
 import matlab.net.http.HTTPOptions
-import matlab.net.http.MessageBody
-import matlab.net.http.RequestMessage
 
-method = upper(method);
-headers = HeaderField("Accept", "application/json");
-if method == "POST"
-    headers(end + 1) = HeaderField("Content-Type", "application/json");
-    request = RequestMessage("post", headers, MessageBody(jsonencode(body)));
-elseif method == "GET"
-    request = RequestMessage("get", headers);
-else
-    error("PIDAgent:UnsupportedGatewayMethod", ...
-        "Unsupported gateway method: %s", method);
-end
+request = pid_agent_ui.buildGatewayRequest(method, body);
 
 options = HTTPOptions("ConnectTimeout", 10, "ResponseTimeout", 360);
 response = request.send(URI(url), options);

@@ -43,3 +43,14 @@ context = pid_agent_ui.resolveCurrentContext();
 verifyEqual(testCase, sort(context.selectedPidPaths), sort([outerPath; innerPath]));
 verifyEqual(testCase, context.modelInfo.pidCount, 2);
 end
+
+function testGatewayRequestBuilder(testCase)
+import matlab.net.http.RequestMethod
+
+getRequest = pid_agent_ui.buildGatewayRequest("GET");
+verifyEqual(testCase, getRequest.Method, RequestMethod.GET);
+
+postRequest = pid_agent_ui.buildGatewayRequest("POST", struct("type", "codex"));
+verifyEqual(testCase, postRequest.Method, RequestMethod.POST);
+verifyEqual(testCase, postRequest.Body.Data, struct("type", "codex"));
+end
