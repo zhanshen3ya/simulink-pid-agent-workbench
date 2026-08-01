@@ -444,6 +444,14 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("function updateStartButton", app_js)
         self.assertIn("const optimisticStatus", app_js)
         self.assertIn("function liveElapsedSeconds", app_v2_js)
+        self.assertIn("MODEL_DRAFT_STORAGE_PREFIX", app_v2_js)
+        self.assertIn("function saveModelDraftNow", app_v2_js)
+        self.assertIn("function applyModelDraft", app_v2_js)
+        self.assertIn("window.addEventListener('beforeunload', saveModelDraftNow)", app_v2_js)
+        draft_section = app_v2_js.split("function captureModelDraft()", 1)[1].split(
+            "function saveModelDraftNow()", 1
+        )[0]
+        self.assertNotIn("apiKey", draft_section)
         self.assertNotIn("el('currentMetrics')", app_js)
         self.assertIn("Multi-PID models require an explicit selection", app_v2_js)
         self.assertIn("return 'coupled';", app_v2_js)

@@ -126,6 +126,172 @@ function captureLoopConfigurations() {
   return saved;
 }
 
+const MODEL_DRAFT_STORAGE_PREFIX = 'pidModelDraft:v1:';
+const MODEL_DRAFT_SETTING_FIELDS = [
+  ['searchStrategy', 'searchStrategyInput', 'value'],
+  ['stopTime', 'stopTimeInput', 'value'],
+  ['maxIterations', 'maxIterationsInput', 'value'],
+  ['numCandidates', 'numCandidatesInput', 'value'],
+  ['overshootTarget', 'overshootTargetInput', 'value'],
+  ['settlingTarget', 'settlingTargetInput', 'value'],
+  ['errorTarget', 'errorTargetInput', 'value'],
+  ['stopOnFirstPass', 'stopOnFirstPassInput', 'checked'],
+  ['aiCandidateCount', 'aiCandidateCountInput', 'value'],
+  ['aiFailOnError', 'aiFailOnErrorInput', 'checked'],
+];
+
+function modelDraftStorageKey(info = state.modelInfo) {
+  const identity = normalizedModelPath(info?.modelPath || state.preferredModelPath)
+    || String(info?.modelName || state.preferredModelName || '').trim().toLowerCase();
+  return identity ? MODEL_DRAFT_STORAGE_PREFIX + identity : '';
+}
+
+function capturePidEditorConfigurations() {
+  const blocks = state.modelInfo?.pidBlocks || [];
+  return state.selectedPidIndexes.map((index) => {
+    const block = blocks[index] || {};
+    const bounds = {};
+    ['Kp', 'Ki', 'Kd', 'N'].forEach((field) => {
+      bounds[field] = [
+        String(el('pid-' + index + '-' + field + '-min')?.value ?? ''),
+        String(el('pid-' + index + '-' + field + '-max')?.value ?? ''),
+      ];
+    });
+    return {
+      pidPath: String(block.path || ''),
+      name: String(el('pid-' + index + '-name')?.value ?? block.name ?? ''),
+      bounds,
+    };
+  }).filter((item) => item.pidPath);
+}
+
+function captureModelDraft() {
+  if (!state.modelInfo) return null;
+  const blocks = state.modelInfo.pidBlocks || [];
+  const settings = {};
+  MODEL_DRAFT_SETTING_FIELDS.forEach(([name, id, property]) => {
+    const node = el(id);
+    if (node) settings[name] = property === 'checked' ? Boolean(node.checked) : String(node.value ?? '');
+  });
+  return {
+    version: 1,
+    modelPath: String(state.modelInfo.modelPath || state.preferredModelPath || ''),
+    modelName: String(state.modelInfo.modelName || state.preferredModelName || ''),
+    savedAt: new Date().toISOString(),
+    selectedPidPaths: state.selectedPidIndexes
+      .map((index) => String(blocks[index]?.path || '')).filter(Boolean),
+    pidEditors: capturePidEditorConfigurations(),
+    loops: captureLoopConfigurations(),
+    settings,
+  };
+}
+
+function saveModelDraftNow() {
+  if (state.modelDraftRestoring) return false;
+  const key = modelDraftStorageKey();
+  const draft = captureModelDraft();
+  if (!key || !draft) return false;
+  try {
+    localStorage.setItem(key, JSON.stringify(draft));
+    if (state.modelDraftSaveTimer) window.clearTimeout(state.modelDraftSaveTimer);
+    state.modelDraftSaveTimer = null;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function scheduleModelDraftSave() {
+  if (state.modelDraftRestoring || !state.modelInfo) return;
+  if (state.modelDraftSaveTimer) window.clearTimeout(state.modelDraftSaveTimer);
+  state.modelDraftSaveTimer = window.setTimeout(saveModelDraftNow, 250);
+}
+
+function loadModelDraft(info = state.modelInfo) {
+  const key = modelDraftStorageKey(info);
+  if (!key) return null;
+  try {
+    const draft = JSON.parse(localStorage.getItem(key) || 'null');
+    return draft && draft.version === 1 ? draft : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setDraftField(id, valueText) {
+  const node = el(id);
+  if (node && valueText !== undefined && valueText !== null) node.value = String(valueText);
+}
+
+function restoreLoopDrafts(loops) {
+  const selectorByName = {
+    role: '.loop-role', reference: '.loop-reference', output: '.loop-output',
+    control: '.loop-control', current: '.loop-current', weight: '.loop-weight',
+    overshoot: '.loop-overshoot', settling: '.loop-settling', error: '.loop-error',
+    rmse: '.loop-rmse', currentMax: '.loop-current-max', ripple: '.loop-ripple',
+    saturation: '.loop-saturation', controlLower: '.loop-control-lower',
+    controlUpper: '.loop-control-upper',
+  };
+  document.querySelectorAll('#loopConfigRows .loop-config').forEach((card) => {
+    const saved = loops?.[String(card.dataset.pidPath || '')];
+    if (!saved) return;
+    Object.entries(selectorByName).forEach(([name, selector]) => {
+      const node = card.querySelector(selector);
+      if (node && saved[name] !== undefined && saved[name] !== null) node.value = String(saved[name]);
+    });
+    const primary = card.querySelector('.loop-primary');
+    if (primary) primary.checked = Boolean(saved.primary);
+  });
+}
+
+function applyModelDraft(draft, options = {}) {
+  if (!draft || !state.modelInfo) return false;
+  state.modelDraftRestoring = true;
+  try {
+    const settings = draft.settings || {};
+    MODEL_DRAFT_SETTING_FIELDS.forEach(([name, id, property]) => {
+      const node = el(id);
+      if (!node || settings[name] === undefined) return;
+      if (property === 'checked') node.checked = Boolean(settings[name]);
+      else node.value = String(settings[name]);
+    });
+
+    if (options.restoreSelection !== false) {
+      const selectedPaths = new Set(stringArray(draft.selectedPidPaths));
+      state.selectedPidIndexes = (state.modelInfo.pidBlocks || [])
+        .map((block, index) => selectedPaths.has(String(block.path)) ? index : -1)
+        .filter((index) => index >= 0)
+        .slice(0, 2);
+      if (!state.selectedPidIndexes.length && state.modelInfo.pidBlocks.length === 1) {
+        state.selectedPidIndexes = [0];
+      }
+    }
+
+    renderModelInfo();
+
+    normalizeList(draft.pidEditors).forEach((saved) => {
+      const index = (state.modelInfo.pidBlocks || [])
+        .findIndex((block) => String(block.path || '') === String(saved.pidPath || ''));
+      if (index < 0 || !state.selectedPidIndexes.includes(index)) return;
+      setDraftField('pid-' + index + '-name', saved.name);
+      ['Kp', 'Ki', 'Kd', 'N'].forEach((field) => {
+        const bounds = saved.bounds?.[field];
+        if (!Array.isArray(bounds)) return;
+        setDraftField('pid-' + index + '-' + field + '-min', bounds[0]);
+        setDraftField('pid-' + index + '-' + field + '-max', bounds[1]);
+      });
+    });
+
+    restoreLoopDrafts(draft.loops || {});
+    el('signalMappingConfirmedInput').checked = false;
+    updateLoopValidity();
+    el('footerStatus').textContent = '已恢复此模型上次保存的配置';
+    return true;
+  } finally {
+    state.modelDraftRestoring = false;
+  }
+}
+
 function validSuggestedSignal(name) {
   const normalized = String(name || '').trim();
   return loggedSignalNames().includes(normalized) ? normalized : '';
@@ -323,6 +489,7 @@ function applyLoopSuggestion(card) {
   el('signalMappingConfirmedInput').checked = false;
   updateLoopValidity();
   setScanState(complete ? '已应用拓扑建议，请核对信号和限幅' : '拓扑建议不完整，请人工选择已记录信号', !complete);
+  scheduleModelDraftSave();
 }
 
 function applySignalSuggestion() {
@@ -856,6 +1023,10 @@ function bindPidAgentV2() {
   el('refreshHistoryButton').addEventListener('click', refreshJob);
   el('applyBestButton').addEventListener('click', applyBestResult);
   el('rollbackBestButton').addEventListener('click', rollbackBestResult);
+  const configBody = el('modelConfigBody');
+  configBody.addEventListener('input', scheduleModelDraftSave);
+  configBody.addEventListener('change', scheduleModelDraftSave);
+  window.addEventListener('beforeunload', saveModelDraftNow);
   window.addEventListener('resize', () => drawScoreTrend(state.history));
   renderLoopMetrics(null);
   renderLoopMetrics(null, 'bestLoopMetricRows');
@@ -899,6 +1070,7 @@ async function discoverModel() {
   const button = el('discoverModelButton');
   const previousModelPath = String(state.modelInfo?.modelPath || '');
   const previousPaths = new Set(state.selectedPidIndexes.map((index) => String(state.modelInfo?.pidBlocks?.[index]?.path || '')).filter(Boolean));
+  saveModelDraftNow();
   button.disabled = true;
   state.enforceModelMatch = true;
   state.preferredModelPath = modelPath;
@@ -938,9 +1110,13 @@ async function discoverModel() {
     } else {
       state.selectedPidIndexes = [];
     }
-    renderModelInfo();
-    const action = payload.pidBlocks.length > 1 ? '；请明确选择一个 PID 或一组已确认的内外环' : '';
-    setScanState(`已读取 ${payload.modelName}：发现 ${payload.pidBlocks.length} 个 PID${action}`);
+    const draft = loadModelDraft(payload);
+    const restored = applyModelDraft(draft, { restoreSelection: !(sameModel && previousPaths.size) });
+    if (!restored) renderModelInfo();
+    const action = payload.pidBlocks.length > 1 && !state.selectedPidIndexes.length
+      ? '；请明确选择一个 PID 或一组已确认的内外环' : '';
+    const memoryNote = restored ? '；已恢复上次配置' : '';
+    setScanState('已读取 ' + payload.modelName + '：发现 ' + payload.pidBlocks.length + ' 个 PID' + action + memoryNote);
     await refreshJob();
   } catch (error) {
     state.modelInfo = null;
@@ -968,6 +1144,7 @@ function applyEmbeddedContext(context) {
 
   const info = context.modelInfo || null;
   if (info) {
+    saveModelDraftNow();
     info.pidBlocks = normalizePidBlocks(info.pidBlocks);
     info.loggedSignals = stringArray(info.loggedSignals);
     state.modelInfo = info;
@@ -988,11 +1165,14 @@ function applyEmbeddedContext(context) {
     } else {
       state.selectedPidIndexes = [];
     }
-    renderModelInfo();
+    const draft = loadModelDraft(info);
+    const restored = applyModelDraft(draft, { restoreSelection: selectedPaths.size === 0 });
+    if (!restored) renderModelInfo();
     let note = '';
     if (selectedPaths.size > 2) note = '；当前选择超过两个，未自动带入，请重新选择';
     else if (info.pidBlocks.length > 1 && !state.selectedPidIndexes.length) note = '；请明确选择一个 PID 或一组已确认的内外环';
-    setScanState(`来自 Simulink：发现 ${info.pidBlocks.length} 个 PID${note}`, selectedPaths.size > 2);
+    const memoryNote = restored ? '；已恢复上次配置' : '';
+    setScanState('来自 Simulink：发现 ' + info.pidBlocks.length + ' 个 PID' + note + memoryNote, selectedPaths.size > 2);
   }
   if (context.initialView) activateView(context.initialView);
   refreshJob();

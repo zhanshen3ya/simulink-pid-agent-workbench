@@ -13,6 +13,8 @@ const state = {
   preferredModelName: '',
   enforceModelMatch: true,
   activeJobMatchesModel: false,
+  modelDraftSaveTimer: null,
+  modelDraftRestoring: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -705,6 +707,7 @@ function togglePidSelection(event) {
     state.selectedPidIndexes = state.selectedPidIndexes.filter((item) => item !== index);
   }
   renderModelInfo();
+  if (typeof scheduleModelDraftSave === 'function') scheduleModelDraftSave();
 }
 
 function defaultUpper(valueNow, floor, multiplier = 4) {
@@ -1094,6 +1097,7 @@ async function startCustom() {
   setScanState('正在提交调参任务...');
   try {
     const config = collectCustomConfig();
+    saveModelDraftNow();
     const payload = await api('/api/pid/jobs/custom', jsonPost(config));
     state.activeJobId = payload.jobId;
     state.enforceModelMatch = true;
