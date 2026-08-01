@@ -7,7 +7,7 @@
       "text": "当前模型\n调参",
       "description": "打开当前 Simulink 模型的 PID 调参界面",
       "icon": "currentModelIcon",
-      "command": "pid_agent_ui.launch('current')",
+      "command": "clear('pid_agent_ui.launch'); pid_agent_ui.launch('current')",
       "commandType": "Script"
     },
     {
@@ -16,7 +16,7 @@
       "text": "选中 PID\n调参",
       "description": "调节当前选中的一个或两个 PID 控制器",
       "icon": "selectedPidIcon",
-      "command": "pid_agent_ui.launch('selected')",
+      "command": "clear('pid_agent_ui.launch'); pid_agent_ui.launch('selected')",
       "commandType": "Script"
     },
     {

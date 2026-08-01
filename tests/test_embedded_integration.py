@@ -378,8 +378,8 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         for icon in icon_entries:
             self.assertTrue((ROOT / "resources" / "icons" / icon["icon16"]).is_file())
             self.assertTrue((ROOT / "resources" / "icons" / icon["icon24"]).is_file())
-        self.assertIn("pid_agent_ui.launch('current')", commands)
-        self.assertIn("pid_agent_ui.launch('selected')", commands)
+        self.assertIn("clear('pid_agent_ui.launch'); pid_agent_ui.launch('current')", commands)
+        self.assertIn("clear('pid_agent_ui.launch'); pid_agent_ui.launch('selected')", commands)
         self.assertIn("pid_agent_ui.openManager()", commands)
         self.assertIn("pid_agent_ui.openHistory()", commands)
 
@@ -452,9 +452,11 @@ class EmbeddedIntegrationTests(unittest.TestCase):
         self.assertIn("number.toExponential(2)", app_v2_js)
         self.assertNotIn("/api/pid/jobs/demo/buck", app_v2_js)
 
+        launch_helper = (ROOT / "+pid_agent_ui" / "launch.m").read_text(encoding="utf-8")
         matlab_app = (ROOT / "+pid_agent_ui" / "PidAgentWebApp.m").read_text(encoding="utf-8")
         http_helper = (ROOT / "+pid_agent_ui" / "sendGatewayHttpRequest.m").read_text(encoding="utf-8")
         request_builder = (ROOT / "+pid_agent_ui" / "buildGatewayRequest.m").read_text(encoding="utf-8")
+        self.assertIn("clear(\"pid_agent_ui.sendGatewayHttpRequest\"", launch_helper)
         self.assertNotIn("webwrite", matlab_app)
         self.assertIn("pid_agent_ui.sendGatewayHttpRequest", matlab_app)
         self.assertIn("performModelAction", matlab_app)

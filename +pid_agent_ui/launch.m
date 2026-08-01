@@ -4,6 +4,8 @@ function app = launch(mode)
 arguments
     mode (1, 1) string = "current"
 end
+rehash;
+clear("pid_agent_ui.sendGatewayHttpRequest", "pid_agent_ui.buildGatewayRequest");
 [context, confirmed] = pid_agent_ui.prepareCurrentContext();
 if ~confirmed
     app = [];
